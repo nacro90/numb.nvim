@@ -6,6 +6,8 @@ Peek a buffer line just when you intend.
 
 - Peaking buffer while entering command `:{number}`
 
+![demo](assets/demo.gif)
+
 ## Installation
 
 ### Packer
