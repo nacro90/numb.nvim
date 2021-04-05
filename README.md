@@ -40,8 +40,8 @@ You can customize the behaviour with following:
 
 ```lua
 require('numb').setup{
-   show_numbers = true -- Enable 'number' for window while peaking
-   show_cursorline = true -- Enable 'cursorline' for window while peaking
+   show_numbers = true -- Enable 'number' for the window while peaking
+   show_cursorline = true -- Enable 'cursorline' for the window while peaking
 }
 ```
 
