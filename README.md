@@ -5,7 +5,7 @@ way.
 
 ## Features
 
-- Peaking buffer while entering command `:{number}`
+- Peeking buffer while entering command `:{number}`
 
 ![demo](assets/demo.gif)
 
