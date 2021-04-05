@@ -20,7 +20,7 @@ use 'nacro90/numb.nvim'
 paq 'nacro90/numb.nvim'
 ```
 
-## Plug
+### Plug
 
 ```viml
 Plug 'nacro90/numb.nvim'
