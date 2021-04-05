@@ -1,6 +1,7 @@
 # numb.nvim
 
-Peek a buffer line just when you intend.
+numb.nvim is a Neovim plugin that peeks lines of the buffer in non-obtrusive
+way.
 
 ## Features
 
