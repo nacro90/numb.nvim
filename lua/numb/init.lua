@@ -11,8 +11,8 @@ local opts = {show_numbers = true, show_cursorline = true}
 local function peek(winnr, linenr)
    local bufnr = api.nvim_win_get_buf(winnr)
    local n_buf_lines = api.nvim_buf_line_count(bufnr)
-   linenr = linenr < n_buf_lines and linenr or n_buf_lines
-   linenr = linenr > 1           and linenr or 1
+   linenr = math.min(linenr, n_buf_lines)
+   linenr = math.max(linenr, 1)
    if not win_cursors[winnr] then
       win_cursors[winnr] = {
          cursor = api.nvim_win_get_cursor(winnr),
