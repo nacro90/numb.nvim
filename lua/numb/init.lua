@@ -1,7 +1,5 @@
 local numb = {}
 
-local log = require('numb.log')
-
 local api = vim.api
 
 -- Stores windows original cursors
