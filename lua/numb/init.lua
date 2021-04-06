@@ -42,8 +42,7 @@ local function unpeek(winnr)
          api.nvim_win_set_option(winnr, 'cursorline',
             orig_state.options.cursorline)
       end
-      local cursor = win_states[winnr].cursor
-      api.nvim_win_set_cursor(winnr, cursor)
+      api.nvim_win_set_cursor(winnr, orig_state.cursor)
    end
    win_states[winnr] = nil
 end
