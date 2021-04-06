@@ -74,4 +74,14 @@ function numb.setup(user_opts)
    ]], true)
 end
 
+function numb.disable()
+   win_cursors = {}
+   vim.api.nvim_exec([[
+      augroup numb
+          autocmd!
+      augroup END
+      augroup! numb
+   ]], true)
+end
+
 return numb
