@@ -37,6 +37,14 @@ Setup with default options:
 require('numb').setup()
 ```
 
+Disable the plugin globally:
+
+```lua
+require('numb').disable()
+```
+
+After you disable the plugin, you can re-enable it by calling the `setup` again.
+
 ### Options
 
 You can customize the behaviour with following:
@@ -50,3 +58,8 @@ require('numb').setup{
 
 After running `setup`, you are good to go. You can try with entering a number to
 the vim command line like `:3`.
+
+When you disable numb, your options are kept in the module level. So after you
+disable it, if you call `setup()` with no overrides, numb will be enabled with
+your customized options (or default ones if you don't have any). You can
+override the options again with calling `setup{...}` as mentioned above.
