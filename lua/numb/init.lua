@@ -2,8 +2,8 @@ local numb = {}
 
 local api = vim.api
 
--- Stores windows original cursors
-local win_cursors = {}
+-- Stores windows original states
+local win_states = {}
 local opts = {show_numbers = true, show_cursorline = true}
 
 local function peek(winnr, linenr)
@@ -11,8 +11,8 @@ local function peek(winnr, linenr)
    local n_buf_lines = api.nvim_buf_line_count(bufnr)
    linenr = math.min(linenr, n_buf_lines)
    linenr = math.max(linenr, 1)
-   if not win_cursors[winnr] then
-      win_cursors[winnr] = {
+   if not win_states[winnr] then
+      win_states[winnr] = {
          cursor = api.nvim_win_get_cursor(winnr),
          options = {
             number = api.nvim_win_get_option(winnr, 'number'),
@@ -26,14 +26,14 @@ local function peek(winnr, linenr)
       api.nvim_win_set_option(winnr, 'cursorline', true)
    end
 
-   local original_column = win_cursors[winnr].cursor[2]
+   local original_column = win_states[winnr].cursor[2]
    local peek_cursor = {linenr, original_column}
    api.nvim_win_set_cursor(winnr, peek_cursor)
    vim.cmd('redraw')
 end
 
 local function unpeek(winnr)
-   local orig_state = win_cursors[winnr]
+   local orig_state = win_states[winnr]
    if orig_state then
       if opts.show_numbers then
          api.nvim_win_set_option(winnr, 'number', orig_state.options.number)
@@ -42,10 +42,10 @@ local function unpeek(winnr)
          api.nvim_win_set_option(winnr, 'cursorline',
             orig_state.options.cursorline)
       end
-      local cursor = win_cursors[winnr].cursor
+      local cursor = win_states[winnr].cursor
       api.nvim_win_set_cursor(winnr, cursor)
    end
-   win_cursors[winnr] = nil
+   win_states[winnr] = nil
 end
 
 function numb.on_cmdline_changed()
@@ -74,7 +74,7 @@ function numb.setup(user_opts)
 end
 
 function numb.disable()
-   win_cursors = {}
+   win_states = {}
    vim.api.nvim_exec([[
       augroup numb
           autocmd!
