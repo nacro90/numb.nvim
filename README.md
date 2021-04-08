@@ -37,6 +37,12 @@ Setup with default options:
 require('numb').setup()
 ```
 
+If you are using a init.vim instead of init.lua, you will need to load the plugin like this:
+
+```Vimscript
+:lua require('numb').setup()
+```
+
 Disable the plugin globally:
 
 ```lua
