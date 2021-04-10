@@ -45,6 +45,7 @@ local function unpeek(winnr)
       api.nvim_win_set_cursor(winnr, orig_state.cursor)
    end
    win_states[winnr] = nil
+   vim.cmd('redraw')
 end
 
 function numb.on_cmdline_changed()
