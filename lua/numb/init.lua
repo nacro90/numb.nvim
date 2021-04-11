@@ -51,13 +51,8 @@ end
 function numb.on_cmdline_changed()
    local cmd_line = vim.fn.getcmdline()
    local winnr = api.nvim_get_current_win()
-   if cmd_line and cmd_line:find('^%d+$') then
-      -- Cmd line contains only one or more numbers
-      peek(winnr, tonumber(cmd_line))
-   else
-      -- Cmd line is empty
-      unpeek(winnr)
-   end
+   local num_str = cmd_line:match('^%d+')
+   if num_str then peek(winnr, tonumber(num_str)) else unpeek(winnr) end
 end
 
 function numb.on_cmdline_exit() unpeek(api.nvim_get_current_win()) end
