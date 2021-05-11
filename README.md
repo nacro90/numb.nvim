@@ -7,7 +7,7 @@ way.
 
 - Peeking buffer while entering command `:{number}`
 
-<script src="https://gist.github.com/nacro90/d9fa04d88d3f757b9ba899fd38866405.js"></script>
+![demo](https://gist.githubusercontent.com/nacro90/d9fa04d88d3f757b9ba899fd38866405/raw/f5991c839a95ed92fcc3943f9b7853a0c620d018/demo.gif)
 
 ## Installation
 
