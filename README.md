@@ -7,7 +7,7 @@ way.
 
 - Peeking buffer while entering command `:{number}`
 
-![demo](assets/demo.gif)
+![demo](https://gist.github.com/nacro90/d9fa04d88d3f757b9ba899fd38866405)
 
 ## Installation
 
