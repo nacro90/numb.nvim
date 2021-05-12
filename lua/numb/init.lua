@@ -2,6 +2,8 @@ local numb = {}
 
 local api = vim.api
 
+local log = require('numb.log')
+
 -- Stores windows original states
 local win_states = {}
 local opts = {show_numbers = true, show_cursorline = true}
@@ -17,6 +19,7 @@ local function peek(winnr, linenr)
          options = {
             number = api.nvim_win_get_option(winnr, 'number'),
             cursorline = api.nvim_win_get_option(winnr, 'cursorline'),
+            foldenable = api.nvim_win_get_option(winnr, 'foldenable'),
          },
       }
    end
@@ -25,22 +28,32 @@ local function peek(winnr, linenr)
    if opts.show_cursorline then
       api.nvim_win_set_option(winnr, 'cursorline', true)
    end
+   api.nvim_win_set_option(winnr, 'foldenable', false)
 
    local original_column = win_states[winnr].cursor[2]
    local peek_cursor = {linenr, original_column}
    api.nvim_win_set_cursor(winnr, peek_cursor)
 end
 
-local function unpeek(winnr)
+local function unpeek(winnr, stay)
    local orig_state = win_states[winnr]
-   if orig_state then
-      if opts.show_numbers then
-         api.nvim_win_set_option(winnr, 'number', orig_state.options.number)
-      end
-      if opts.show_cursorline then
-         api.nvim_win_set_option(winnr, 'cursorline',
-            orig_state.options.cursorline)
-      end
+
+   if not orig_state then return end
+
+   if opts.show_numbers then
+      api.nvim_win_set_option(winnr, 'number', orig_state.options.number)
+   end
+   if opts.show_cursorline then
+      api.nvim_win_set_option(winnr, 'cursorline', orig_state.options.cursorline)
+   end
+
+   api.nvim_win_set_option(winnr, 'foldenable', orig_state.options.foldenable)
+
+   if stay then
+      -- Unfold at the cursorline if user wants to stay
+      vim.cmd('normal! zv')
+   else
+      -- Rollback the cursor if the user does not want to stay
       api.nvim_win_set_cursor(winnr, orig_state.cursor)
    end
    win_states[winnr] = nil
@@ -54,12 +67,18 @@ function numb.on_cmdline_changed()
       peek(winnr, tonumber(num_str))
       vim.cmd('redraw')
    else
-      unpeek(winnr)
+      unpeek(winnr, false)
       vim.cmd('redraw')
    end
 end
 
-function numb.on_cmdline_exit() unpeek(api.nvim_get_current_win()) end
+function numb.on_cmdline_exit()
+   log.trace('on_cmdline_exit()')
+   local winnr = api.nvim_get_current_win()
+   -- Stay if the user does not abort the cmdline
+   local stay = not vim.v.event.abort
+   unpeek(winnr, stay)
+end
 
 function numb.setup(user_opts)
    if user_opts then opts = vim.tbl_extend('force', opts, user_opts) end
