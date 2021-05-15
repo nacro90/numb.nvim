@@ -3,9 +3,6 @@ local numb = {}
 local api = vim.api
 local cmd = vim.cmd
 
--- Make nvim_exec more clutter free
-local function nvim_exec(c) return api.nvim_exec(c, true) end
-
 local log = require('numb.log')
 
 -- Stores windows original states
@@ -17,6 +14,28 @@ local opts = {
    show_cursorline = true, -- Enable 'cursorline' for the window while peeking
 }
 
+-- Window options that are manipulated and saved while peeking
+local tracked_win_options = { 'number', 'cursorline', 'foldenable' }
+
+--- Saves values of tracked window options of a window to given table
+local function save_win_state(states, winnr)
+   local win_options = {}
+   for _, option in ipairs(tracked_win_options) do
+      win_options[option] = api.nvim_win_get_option(winnr, option)
+   end
+   states[winnr] = {
+      cursor = api.nvim_win_get_cursor(winnr),
+      options = win_options,
+   }
+end
+
+local function set_win_options(winnr, options)
+   log.info('set_win_options(): winnr=', winnr, ', options=', options)
+   for option, value in pairs(options) do
+      api.nvim_win_set_option(winnr, option, value)
+   end
+end
+
 local function peek(winnr, linenr)
    local bufnr = api.nvim_win_get_buf(winnr)
    local n_buf_lines = api.nvim_buf_line_count(bufnr)
@@ -24,27 +43,20 @@ local function peek(winnr, linenr)
    linenr = math.max(linenr, 1)
 
    -- Saving window state if this is a first call of peek()
-   if not win_states[winnr] then
-      win_states[winnr] = {
-         cursor = api.nvim_win_get_cursor(winnr),
-         options = {
-            number = api.nvim_win_get_option(winnr, 'number'),
-            cursorline = api.nvim_win_get_option(winnr, 'cursorline'),
-            foldenable = api.nvim_win_get_option(winnr, 'foldenable'),
-         },
-      }
-   end
+   if not win_states[winnr] then save_win_state(win_states, winnr) end
 
    -- Set window options for peeking
-   if opts.show_numbers then api.nvim_win_set_option(winnr, 'number', true) end
-   if opts.show_cursorline then
-      api.nvim_win_set_option(winnr, 'cursorline', true)
-   end
-   api.nvim_win_set_option(winnr, 'foldenable', false)
+   local peeking_options = {
+      foldenable = false,
+      number = opts.show_numbers and true or nil,
+      cursorline = opts.show_cursorline and true or nil,
+   }
+
+   set_win_options(winnr, peeking_options)
 
    -- Setting the cursor
    local original_column = win_states[winnr].cursor[2]
-   local peek_cursor = {linenr, original_column}
+   local peek_cursor = { linenr, original_column }
    api.nvim_win_set_cursor(winnr, peek_cursor)
 end
 
@@ -53,14 +65,8 @@ local function unpeek(winnr, stay)
 
    if not orig_state then return end
 
-   -- Restoring necessary window options
-   if opts.show_numbers then
-      api.nvim_win_set_option(winnr, 'number', orig_state.options.number)
-   end
-   if opts.show_cursorline then
-      api.nvim_win_set_option(winnr, 'cursorline', orig_state.options.cursorline)
-   end
-   api.nvim_win_set_option(winnr, 'foldenable', orig_state.options.foldenable)
+   -- Restoring original window options
+   set_win_options(winnr, orig_state.options)
 
    if stay then
       -- Unfold at the cursorline if user wants to stay
@@ -78,11 +84,10 @@ function numb.on_cmdline_changed()
    local num_str = cmd_line:match('^%d+')
    if num_str then
       peek(winnr, tonumber(num_str))
-      cmd('redraw')
    else
       unpeek(winnr, false)
-      cmd('redraw')
    end
+   cmd('redraw')
 end
 
 function numb.on_cmdline_exit()
@@ -95,7 +100,7 @@ end
 
 function numb.setup(user_opts)
    opts = vim.tbl_extend('force', opts, user_opts or {})
-   nvim_exec [[
+   cmd [[
       augroup numb
          autocmd!
          autocmd CmdlineChanged : lua require('numb').on_cmdline_changed()
@@ -106,7 +111,7 @@ end
 
 function numb.disable()
    win_states = {}
-   nvim_exec [[
+   cmd [[
       augroup numb
          autocmd!
       augroup END
