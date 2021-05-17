@@ -1,7 +1,7 @@
 local numb = {}
 
 local api = vim.api
-local cmd = vim.cmd
+local cmd = api.nvim_command
 
 local log = require('numb.log')
 
@@ -79,7 +79,7 @@ local function unpeek(winnr, stay)
 end
 
 function numb.on_cmdline_changed()
-   local cmd_line = vim.fn.getcmdline()
+   local cmd_line = api.nvim_call_function('getcmdline', {})
    local winnr = api.nvim_get_current_win()
    local num_str = cmd_line:match('^%d+')
    if num_str then
@@ -94,29 +94,26 @@ function numb.on_cmdline_exit()
    log.trace('on_cmdline_exit()')
    local winnr = api.nvim_get_current_win()
    -- Stay if the user does not abort the cmdline
-   local stay = not vim.v.event.abort
+   local event = api.nvim_get_vvar('event')
+   local stay = not event.abort
    unpeek(winnr, stay)
 end
 
 function numb.setup(user_opts)
    opts = vim.tbl_extend('force', opts, user_opts or {})
-   cmd [[
-      augroup numb
-         autocmd!
-         autocmd CmdlineChanged : lua require('numb').on_cmdline_changed()
-         autocmd CmdlineLeave : lua require('numb').on_cmdline_exit()
-      augroup END
-   ]]
+   cmd [[ augroup numb ]]
+   cmd [[    autocmd! ]]
+   cmd [[    autocmd CmdlineChanged : lua require('numb').on_cmdline_changed() ]]
+   cmd [[    autocmd CmdlineLeave : lua require('numb').on_cmdline_exit() ]]
+   cmd [[ augroup END ]]
 end
 
 function numb.disable()
    win_states = {}
-   cmd [[
-      augroup numb
-         autocmd!
-      augroup END
-      augroup! numb
-   ]]
+   cmd [[ augroup numb ]]
+   cmd [[    autocmd! ]]
+   cmd [[ augroup END ]]
+   cmd [[ augroup! numb ]]
 end
 
 return numb
