@@ -37,6 +37,7 @@ local function set_win_options(winnr, options)
 end
 
 local function peek(winnr, linenr)
+   log.trace(('peek(), winnr=%d, linenr=%d'):format(winnr, linenr))
    local bufnr = api.nvim_win_get_buf(winnr)
    local n_buf_lines = api.nvim_buf_line_count(bufnr)
    linenr = math.min(linenr, n_buf_lines)
@@ -78,21 +79,29 @@ local function unpeek(winnr, stay)
    win_states[winnr] = nil
 end
 
+local function is_peeking(winnr) return win_states[winnr] and true or false end
+
 function numb.on_cmdline_changed()
+   log.trace('on_cmdline_changed()')
    local cmd_line = api.nvim_call_function('getcmdline', {})
    local winnr = api.nvim_get_current_win()
    local num_str = cmd_line:match('^%d+')
    if num_str then
       peek(winnr, tonumber(num_str))
-   else
+      cmd('redraw')
+   elseif is_peeking(winnr) then
       unpeek(winnr, false)
+      cmd('redraw')
    end
-   cmd('redraw')
 end
 
 function numb.on_cmdline_exit()
    log.trace('on_cmdline_exit()')
    local winnr = api.nvim_get_current_win()
+   if not is_peeking(winnr) then
+      log.debug(winnr .. ' is not at peek state, returning')
+      return
+   end
    -- Stay if the user does not abort the cmdline
    local event = api.nvim_get_vvar('event')
    local stay = not event.abort
