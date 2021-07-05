@@ -12,6 +12,7 @@ local win_states = {}
 local opts = {
    show_numbers = true, -- Enable 'number' for the window while peeking
    show_cursorline = true, -- Enable 'cursorline' for the window while peeking
+   number_only = false, -- Peek only when the command is only a number instead of when it starts with a number
 }
 
 -- Window options that are manipulated and saved while peeking
@@ -85,7 +86,7 @@ function numb.on_cmdline_changed()
    log.trace('on_cmdline_changed()')
    local cmd_line = api.nvim_call_function('getcmdline', {})
    local winnr = api.nvim_get_current_win()
-   local num_str = cmd_line:match('^%d+')
+   local num_str = cmd_line:match('^%d+' .. (opts.number_only and '$' or ''))
    if num_str then
       peek(winnr, tonumber(num_str))
       cmd('redraw')
