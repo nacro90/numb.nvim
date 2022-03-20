@@ -13,6 +13,7 @@ local opts = {
   show_numbers = true, -- Enable 'number' for the window while peeking
   show_cursorline = true, -- Enable 'cursorline' for the window while peeking
   number_only = false, -- Peek only when the command is only a number instead of when it starts with a number
+  centered_peeking = true, -- Peeked line will be centered relative to window
 }
 
 -- Window options that are manipulated and saved while peeking
@@ -62,6 +63,10 @@ local function peek(winnr, linenr)
   local original_column = win_states[winnr].cursor[2]
   local peek_cursor = { linenr, original_column }
   api.nvim_win_set_cursor(winnr, peek_cursor)
+
+  if opts.centered_peeking then
+    cmd "normal! zz"
+  end
 end
 
 local function unpeek(winnr, stay)
