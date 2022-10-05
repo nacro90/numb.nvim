@@ -29,6 +29,7 @@ local function save_win_state(states, winnr)
   states[winnr] = {
     cursor = api.nvim_win_get_cursor(winnr),
     options = win_options,
+    topline = vim.fn.winsaveview().topline,
   }
 end
 
@@ -89,6 +90,7 @@ local function unpeek(winnr, stay)
   else
     -- Rollback the cursor if the user does not want to stay
     api.nvim_win_set_cursor(winnr, orig_state.cursor)
+    vim.fn.winrestview { topline = orig_state.topline }
   end
   win_states[winnr] = nil
 end
