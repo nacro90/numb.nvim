@@ -83,13 +83,12 @@ local function unpeek(winnr, stay)
 
   -- Restoring original window options
   set_win_options(winnr, orig_state.options)
+  api.nvim_win_set_cursor(winnr, orig_state.cursor)
 
   if stay then
     -- Unfold at the cursorline if user wants to stay
     cmd "normal! zv"
   else
-    -- Rollback the cursor if the user does not want to stay
-    api.nvim_win_set_cursor(winnr, orig_state.cursor)
     vim.fn.winrestview { topline = orig_state.topline }
   end
   win_states[winnr] = nil
@@ -99,13 +98,29 @@ local function is_peeking(winnr)
   return win_states[winnr] and true or false
 end
 
+local function parse_num_str(str)
+  local sign, number_str = str:match "^([%+%-]?)(%d+)"
+  local number = tonumber(number_str)
+  if sign == "" then
+    return number
+  else
+    local current_line, _ = unpack(vim.api.nvim_win_get_cursor(0))
+    if sign == "+" then
+      return current_line + number
+    else
+      return current_line - number
+    end
+  end
+end
+
 function numb.on_cmdline_changed()
   log.trace "on_cmdline_changed()"
   local cmd_line = api.nvim_call_function("getcmdline", {})
   local winnr = api.nvim_get_current_win()
-  local num_str = cmd_line:match("^%d+" .. (opts.number_only and "$" or ""))
+  local num_str = cmd_line:match("^([%+%-]?%d+)" .. (opts.number_only and "$" or ""))
   if num_str then
-    peek(winnr, tonumber(num_str))
+    unpeek(winnr, false)
+    peek(winnr, parse_num_str(num_str))
     cmd "redraw"
   elseif is_peeking(winnr) then
     unpeek(winnr, false)
