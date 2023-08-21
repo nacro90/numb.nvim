@@ -99,25 +99,23 @@ local function is_peeking(winnr)
 end
 
 local function parse_num_str(str)
-  local sign, number_str = str:match "^([%+%-]?)(%d+)"
-  local number = tonumber(number_str)
-  if sign == "" then
-    return number
-  else
-    local current_line, _ = unpack(vim.api.nvim_win_get_cursor(0))
-    if sign == "+" then
-      return current_line + number
-    else
-      return current_line - number
-    end
+  str = str:gsub("([%+%-])([%+%-])", "%11%2") -- turn input into a mathematical equation by adding a 1 between a plus or minus
+  str = str:gsub("([%+%-])([%+%-])", "%11%2") -- a sign that was matched as $2 was not yet matched as $1
+  if str:find("[%+%-]$") then -- also catch last character
+    str = str .. 1
   end
+  if str:find("^[%+%-]") then
+    local current_line, _ = unpack(vim.api.nvim_win_get_cursor(0))
+    str = current_line .. str
+  end
+  return load("return " .. str)()
 end
 
 function numb.on_cmdline_changed()
   log.trace "on_cmdline_changed()"
   local cmd_line = api.nvim_call_function("getcmdline", {})
   local winnr = api.nvim_get_current_win()
-  local num_str = cmd_line:match("^([%+%-]?%d+)" .. (opts.number_only and "$" or ""))
+  local num_str = cmd_line:match("^([%+%-%d]+)" .. (opts.number_only and "$" or ""))
   if num_str then
     unpeek(winnr, false)
     peek(winnr, parse_num_str(num_str))
