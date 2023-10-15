@@ -140,7 +140,10 @@ function numb.on_cmdline_exit()
   unpeek(winnr, stay)
 
   if opts.skip_cmdline_history then
-    vim.fn.histdel("cmd", -1)
+    -- needs delay to ensure the item is already in the history
+    vim.defer_fn(function()
+      vim.fn.histdel(":", -1)
+    end, 1)
   end
 end
 
