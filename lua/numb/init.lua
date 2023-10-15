@@ -15,7 +15,7 @@ local opts = {
   hide_relativenumbers = true, -- Enable turning off 'relativenumber' for the window while peeking
   number_only = false, -- Peek only when the command is only a number instead of when it starts with a number
   centered_peeking = true, -- Peeked line will be centered relative to window
-  skip_cmdline_history = false, -- cmds will not be stored in the cmdline-history
+  skip_cmdline_history = false, -- Cmds will not be stored in the cmdline-history
 }
 
 -- Window options that are manipulated and saved while peeking
