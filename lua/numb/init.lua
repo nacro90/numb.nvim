@@ -15,6 +15,7 @@ local opts = {
   hide_relativenumbers = true, -- Enable turning off 'relativenumber' for the window while peeking
   number_only = false, -- Peek only when the command is only a number instead of when it starts with a number
   centered_peeking = true, -- Peeked line will be centered relative to window
+  skip_cmdline_history = false, -- cmds will not be stored in the cmdline-history
 }
 
 -- Window options that are manipulated and saved while peeking
@@ -137,6 +138,10 @@ function numb.on_cmdline_exit()
   local event = api.nvim_get_vvar "event"
   local stay = not event.abort
   unpeek(winnr, stay)
+
+  if opts.skip_cmdline_history then
+    vim.fn.histdel("cmd", -1)
+  end
 end
 
 function numb.setup(user_opts)
