@@ -142,7 +142,10 @@ function numb.on_cmdline_exit()
   if opts.skip_cmdline_history then
     -- needs delay to ensure the item is already in the history
     vim.defer_fn(function()
-      vim.fn.histdel(":", -1)
+      local cmdlineNotAborted = vim.fn.histget(":", -1):match "^%d+$"
+      if cmdlineNotAborted then
+        vim.fn.histdel(":", -1)
+      end
     end, 1)
   end
 end
