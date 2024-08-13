@@ -5,6 +5,8 @@ local cmd = api.nvim_command
 
 local log = require "numb.log"
 
+local peek_cursor = nil
+
 -- Stores windows original states
 local win_states = {}
 
@@ -66,7 +68,7 @@ local function peek(winnr, linenr)
 
   -- Setting the cursor
   local original_column = win_states[winnr].cursor[2]
-  local peek_cursor = { linenr, original_column }
+  peek_cursor = { linenr, original_column }
   api.nvim_win_set_cursor(winnr, peek_cursor)
 
   if opts.centered_peeking then
@@ -86,8 +88,15 @@ local function unpeek(winnr, stay)
   api.nvim_win_set_cursor(winnr, orig_state.cursor)
 
   if stay then
+    if peek_cursor ~= nil then
+      api.nvim_win_set_cursor(winnr, peek_cursor)
+      peek_cursor = nil
+    end
     -- Unfold at the cursorline if user wants to stay
     cmd "normal! zv"
+    if opts.centered_peeking then
+      cmd "normal! zz"
+    end
   else
     vim.fn.winrestview { topline = orig_state.topline }
   end
