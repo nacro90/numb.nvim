@@ -31,6 +31,17 @@ paq 'nacro90/numb.nvim'
 Plug 'nacro90/numb.nvim'
 ```
 
+### Lazy.nvim
+
+```lua
+{
+  'nacro90/numb.nvim',
+  config = function()
+    require('numb').setup()
+  end,
+}
+```
+
 ## Usage
 
 Setup with default options:
