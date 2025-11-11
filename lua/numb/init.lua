@@ -108,14 +108,25 @@ local function unpeek(winnr, stay)
   api.nvim_win_set_cursor(winnr, orig_state.cursor)
 
   if stay then
-    if peek_cursor ~= nil then
-      api.nvim_win_set_cursor(winnr, peek_cursor)
-      peek_cursor = nil
-    end
-    -- Unfold at the cursorline if user wants to stay
-    cmd "normal! zv"
-    if opts.centered_peeking then
-      cmd "normal! zz"
+    local final_cursor = peek_cursor
+    peek_cursor = nil
+    if final_cursor then
+      vim.schedule(function()
+        if not api.nvim_win_is_valid(winnr) then
+          return
+        end
+        local previous_win = api.nvim_get_current_win()
+        api.nvim_set_current_win(winnr)
+        api.nvim_win_set_cursor(winnr, final_cursor)
+        -- Unfold at the cursorline if user wants to stay
+        cmd "normal! zv"
+        if opts.centered_peeking then
+          cmd "normal! zz"
+        end
+        if previous_win ~= winnr and api.nvim_win_is_valid(previous_win) then
+          api.nvim_set_current_win(previous_win)
+        end
+      end)
     end
   else
     fn.winrestview { topline = orig_state.topline }

@@ -82,6 +82,14 @@ function Tests.sequential_absolute_jumps_clear_state()
   assert(vim.wo.number == false, "window state restored between sequential jumps")
 end
 
+function Tests.relative_jump_from_current_line()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  run_cmd ":+2\r"
+  assert_cursor(4, "relative jump")
+end
+
 local M = {}
 
 function M.run()
