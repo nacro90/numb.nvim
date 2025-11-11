@@ -1,10 +1,13 @@
+---@mod numb Core peek logic for :{number} and relative Ex commands.
 local numb = {}
 
 local api = vim.api
-local cmd = api.nvim_command
+local fn = vim.fn
+local cmd = vim.cmd
 
 local log = require "numb.log"
 
+-- Stores the target position we expect to land on after leaving the cmdline.
 local peek_cursor = nil
 
 -- Stores windows original states
@@ -22,7 +25,8 @@ local opts = {
 -- Window options that are manipulated and saved while peeking
 local tracked_win_options = { "number", "cursorline", "foldenable", "relativenumber" }
 
---- Saves values of tracked window options of a window to given table
+---@param states table Stores the captured per-window state
+---@param winnr integer Window handle whose state will be saved
 local function save_win_state(states, winnr)
   local win_options = {}
   for _, option in ipairs(tracked_win_options) do
@@ -31,10 +35,12 @@ local function save_win_state(states, winnr)
   states[winnr] = {
     cursor = api.nvim_win_get_cursor(winnr),
     options = win_options,
-    topline = vim.fn.winsaveview().topline,
+    topline = fn.winsaveview().topline,
   }
 end
 
+---@param winnr integer
+---@param options table
 local function set_win_options(winnr, options)
   log.info("set_win_options(): winnr=", winnr, ", options=", options)
   for option, value in pairs(options) do
@@ -42,6 +48,8 @@ local function set_win_options(winnr, options)
   end
 end
 
+---@param winnr integer
+---@param linenr integer
 local function peek(winnr, linenr)
   log.trace(("peek(), winnr=%d, linenr=%d"):format(winnr, linenr))
   local bufnr = api.nvim_win_get_buf(winnr)
@@ -76,6 +84,8 @@ local function peek(winnr, linenr)
   end
 end
 
+---@param winnr integer
+---@param stay boolean
 local function unpeek(winnr, stay)
   local orig_state = win_states[winnr]
 
@@ -98,7 +108,7 @@ local function unpeek(winnr, stay)
       cmd "normal! zz"
     end
   else
-    vim.fn.winrestview { topline = orig_state.topline }
+    fn.winrestview { topline = orig_state.topline }
   end
   win_states[winnr] = nil
 end
@@ -107,6 +117,9 @@ local function is_peeking(winnr)
   return win_states[winnr] and true or false
 end
 
+---Parses an Ex command number expression (supports +/- math).
+---@param str string
+---@return integer
 local function parse_num_str(str)
   str = str:gsub("([%+%-])([%+%-])", "%11%2") -- turn input into a mathematical equation by adding a 1 between a plus or minus
   str = str:gsub("([%+%-])([%+%-])", "%11%2") -- a sign that was matched as $2 was not yet matched as $1
@@ -114,7 +127,7 @@ local function parse_num_str(str)
     str = str .. 1
   end
   if str:find("^[%+%-]") then
-    local current_line, _ = unpack(vim.api.nvim_win_get_cursor(0))
+    local current_line, _ = unpack(api.nvim_win_get_cursor(0))
     str = current_line .. str
   end
   return load("return " .. str)()
@@ -122,7 +135,7 @@ end
 
 function numb.on_cmdline_changed()
   log.trace "on_cmdline_changed()"
-  local cmd_line = api.nvim_call_function("getcmdline", {})
+  local cmd_line = fn.getcmdline()
   local winnr = api.nvim_get_current_win()
   local num_str = cmd_line:match("^([%+%-%d]+)" .. (opts.number_only and "$" or ""))
   if num_str then
@@ -150,19 +163,22 @@ end
 
 function numb.setup(user_opts)
   opts = vim.tbl_extend("force", opts, user_opts or {})
-  cmd [[ augroup numb ]]
-  cmd [[    autocmd! ]]
-  cmd [[    autocmd CmdlineChanged : lua require('numb').on_cmdline_changed() ]]
-  cmd [[    autocmd CmdlineLeave : lua require('numb').on_cmdline_exit() ]]
-  cmd [[ augroup END ]]
+  local group = api.nvim_create_augroup("numb", { clear = true })
+  api.nvim_create_autocmd("CmdlineChanged", {
+    group = group,
+    pattern = ":",
+    callback = numb.on_cmdline_changed,
+  })
+  api.nvim_create_autocmd("CmdlineLeave", {
+    group = group,
+    pattern = ":",
+    callback = numb.on_cmdline_exit,
+  })
 end
 
 function numb.disable()
   win_states = {}
-  cmd [[ augroup numb ]]
-  cmd [[    autocmd! ]]
-  cmd [[ augroup END ]]
-  cmd [[ augroup! numb ]]
+  pcall(api.nvim_del_augroup_by_name, "numb")
 end
 
 return numb

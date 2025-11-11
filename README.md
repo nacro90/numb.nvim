@@ -85,3 +85,7 @@ When you disable numb, your options are kept in the module level. So after you
 disable it, if you call `setup()` with no overrides, numb will be enabled with
 your customized options (or default ones if you don't have any). You can
 override the options again with calling `setup{...}` as mentioned above.
+
+## Contributing
+
+Read [AGENTS.md](AGENTS.md) for repository guidelines, coding standards, and PR expectations. Before opening a pull request, run `scripts/check.sh` to ensure Stylua formatting, the headless smoke test, and the automated regression tests all pass.
