@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+
+      - name: Install Stylua
+        run: |
+          curl -L https://github.com/JohnnyMorganz/StyLua/releases/download/v0.20.0/stylua-linux-x86_64.zip -o stylua.zip
+          unzip -q stylua.zip
+          sudo mv stylua /usr/local/bin/stylua
+          sudo chmod +x /usr/local/bin/stylua
+
+      - name: Run project checks
+        run: ./scripts/check.sh
