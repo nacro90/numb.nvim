@@ -10,8 +10,18 @@ local log = require "numb.log"
 -- Stores the target position we expect to land on after leaving the cmdline.
 local peek_cursor = nil
 
--- Stores windows original states
+---@class NumbWinState
+---@field cursor integer[]
+---@field options table<string, boolean>
+---@field topline integer
+
+---@type table<integer, NumbWinState>
 local win_states = {}
+
+local function clamp_linenr(bufnr, linenr)
+  local max_line = api.nvim_buf_line_count(bufnr)
+  return math.max(1, math.min(max_line, linenr))
+end
 
 -- Options with default values
 local opts = {
@@ -30,7 +40,7 @@ local tracked_win_options = { "number", "cursorline", "foldenable", "relativenum
 local function save_win_state(states, winnr)
   local win_options = {}
   for _, option in ipairs(tracked_win_options) do
-    win_options[option] = api.nvim_win_get_option(winnr, option)
+    win_options[option] = api.nvim_get_option_value(option, { win = winnr, scope = "local" })
   end
   states[winnr] = {
     cursor = api.nvim_win_get_cursor(winnr),
@@ -44,7 +54,9 @@ end
 local function set_win_options(winnr, options)
   log.info("set_win_options(): winnr=", winnr, ", options=", options)
   for option, value in pairs(options) do
-    api.nvim_win_set_option(winnr, option, value)
+    if value ~= nil then
+      api.nvim_set_option_value(option, value, { win = winnr, scope = "local" })
+    end
   end
 end
 
@@ -53,9 +65,7 @@ end
 local function peek(winnr, linenr)
   log.trace(("peek(), winnr=%d, linenr=%d"):format(winnr, linenr))
   local bufnr = api.nvim_win_get_buf(winnr)
-  local n_buf_lines = api.nvim_buf_line_count(bufnr)
-  linenr = math.min(linenr, n_buf_lines)
-  linenr = math.max(linenr, 1)
+  linenr = clamp_linenr(bufnr, linenr)
 
   -- Saving window state if this is a first call of peek()
   if not win_states[winnr] then
