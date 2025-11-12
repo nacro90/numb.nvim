@@ -108,14 +108,25 @@ local function unpeek(winnr, stay)
   api.nvim_win_set_cursor(winnr, orig_state.cursor)
 
   if stay then
-    if peek_cursor ~= nil then
-      api.nvim_win_set_cursor(winnr, peek_cursor)
-      peek_cursor = nil
-    end
-    -- Unfold at the cursorline if user wants to stay
-    cmd "normal! zv"
-    if opts.centered_peeking then
-      cmd "normal! zz"
+    local final_cursor = peek_cursor
+    peek_cursor = nil
+    if final_cursor then
+      vim.schedule(function()
+        if not api.nvim_win_is_valid(winnr) then
+          return
+        end
+        local previous_win = api.nvim_get_current_win()
+        api.nvim_set_current_win(winnr)
+        api.nvim_win_set_cursor(winnr, final_cursor)
+        -- Unfold at the cursorline if user wants to stay
+        cmd "normal! zv"
+        if opts.centered_peeking then
+          cmd "normal! zz"
+        end
+        if previous_win ~= winnr and api.nvim_win_is_valid(previous_win) then
+          api.nvim_set_current_win(previous_win)
+        end
+      end)
     end
   else
     fn.winrestview { topline = orig_state.topline }
@@ -133,10 +144,10 @@ end
 local function parse_num_str(str)
   str = str:gsub("([%+%-])([%+%-])", "%11%2") -- turn input into a mathematical equation by adding a 1 between a plus or minus
   str = str:gsub("([%+%-])([%+%-])", "%11%2") -- a sign that was matched as $2 was not yet matched as $1
-  if str:find("[%+%-]$") then -- also catch last character
+  if str:find "[%+%-]$" then -- also catch last character
     str = str .. 1
   end
-  if str:find("^[%+%-]") then
+  if str:find "^[%+%-]" then
     local current_line, _ = unpack(api.nvim_win_get_cursor(0))
     str = current_line .. str
   end
