@@ -144,10 +144,10 @@ end
 local function parse_num_str(str)
   str = str:gsub("([%+%-])([%+%-])", "%11%2") -- turn input into a mathematical equation by adding a 1 between a plus or minus
   str = str:gsub("([%+%-])([%+%-])", "%11%2") -- a sign that was matched as $2 was not yet matched as $1
-  if str:find("[%+%-]$") then -- also catch last character
+  if str:find "[%+%-]$" then -- also catch last character
     str = str .. 1
   end
-  if str:find("^[%+%-]") then
+  if str:find "^[%+%-]" then
     local current_line, _ = unpack(api.nvim_win_get_cursor(0))
     str = current_line .. str
   end
