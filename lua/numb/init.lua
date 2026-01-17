@@ -105,6 +105,9 @@ local function unpeek(winnr, stay)
 
   -- Restoring original window options
   set_win_options(winnr, orig_state.options)
+
+  -- Always restore cursor to original position first
+  -- Vim's native Ex command will handle the final navigation when stay=true
   api.nvim_win_set_cursor(winnr, orig_state.cursor)
 
   if stay then
@@ -140,18 +143,54 @@ end
 
 ---Parses an Ex command number expression (supports +/- math).
 ---@param str string
----@return integer
-local function parse_num_str(str)
-  str = str:gsub("([%+%-])([%+%-])", "%11%2") -- turn input into a mathematical equation by adding a 1 between a plus or minus
-  str = str:gsub("([%+%-])([%+%-])", "%11%2") -- a sign that was matched as $2 was not yet matched as $1
-  if str:find "[%+%-]$" then -- also catch last character
+---@param base_line integer|nil Base line for relative jumps
+---@return integer|nil
+local function parse_num_str(str, base_line)
+  -- Validate input contains only expected characters (defense in depth)
+  if not str:match "^[%+%-%d]+$" then
+    log.warn("Invalid number expression: " .. str)
+    return nil
+  end
+
+  -- Transform consecutive +/- into math expressions by inserting "1"
+  -- E.g., "++" becomes "+1+", "--" becomes "-1-"
+  str = str:gsub("([%+%-])([%+%-])", "%11%2")
+  str = str:gsub("([%+%-])([%+%-])", "%11%2") -- second pass for "+++" patterns
+
+  -- Handle trailing operator (e.g., ":+" means "+1")
+  if str:find "[%+%-]$" then
     str = str .. 1
   end
+
+  -- Handle leading operator (relative jump from current line)
+  local base = 0
   if str:find "^[%+%-]" then
-    local current_line, _ = unpack(api.nvim_win_get_cursor(0))
-    str = current_line .. str
+    base = base_line or api.nvim_win_get_cursor(0)[1]
   end
-  return load("return " .. str)()
+
+  -- Safe arithmetic parsing without load()
+  local result = base
+  local current_num = ""
+  local sign = 1
+
+  for i = 1, #str do
+    local char = str:sub(i, i)
+    if char == "+" then
+      result = result + sign * (tonumber(current_num) or 0)
+      current_num = ""
+      sign = 1
+    elseif char == "-" then
+      result = result + sign * (tonumber(current_num) or 0)
+      current_num = ""
+      sign = -1
+    else
+      current_num = current_num .. char
+    end
+  end
+  -- Add final number
+  result = result + sign * (tonumber(current_num) or 0)
+
+  return math.floor(result)
 end
 
 function numb.on_cmdline_changed()
@@ -160,9 +199,14 @@ function numb.on_cmdline_changed()
   local winnr = api.nvim_get_current_win()
   local num_str = cmd_line:match("^([%+%-%d]+)" .. (opts.number_only and "$" or ""))
   if num_str then
-    unpeek(winnr, false)
-    peek(winnr, parse_num_str(num_str))
-    cmd "redraw"
+    -- Use original cursor position from win_states if peeking, otherwise current
+    local base_line = win_states[winnr] and win_states[winnr].cursor[1] or api.nvim_win_get_cursor(winnr)[1]
+    local target_line = parse_num_str(num_str, base_line)
+    if target_line then
+      unpeek(winnr, false)
+      peek(winnr, target_line)
+      cmd "redraw"
+    end
   elseif is_peeking(winnr) then
     unpeek(winnr, false)
     cmd "redraw"
