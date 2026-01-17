@@ -228,6 +228,187 @@ function Tests.number_only_true_ignores_substitution_pattern()
   assert_cursor(1, "number_only=true: cursor stays at original (no peek)")
 end
 
+-------------------------------------------------------------------------------
+-- STATE ENCAPSULATION TESTS
+-------------------------------------------------------------------------------
+
+function Tests.state_win_states_cleared_after_jump()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  run_cmd ":10\r"
+  assert_cursor(10, "jump completed")
+  -- After jump, win_states should be empty (state cleaned up)
+  local state = numb._state
+  assert(state, "numb._state should be exposed for testing")
+  assert(vim.tbl_isempty(state.win_states), "win_states should be empty after confirmed jump")
+end
+
+function Tests.state_peek_cursor_cleared_after_jump()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  run_cmd ":15\r"
+  -- Wait for scheduled callback to complete
+  vim.wait(100, function()
+    return false
+  end, 10, false)
+  local state = numb._state
+  assert(state.peek_cursor == nil, "peek_cursor should be nil after confirmed jump")
+end
+
+function Tests.state_reset_method_clears_state()
+  local numb = configure()
+  reset_buffer()
+  -- Manually populate state to test reset
+  numb._state.win_states[999] = { cursor = { 1, 0 }, options = {}, topline = 1 }
+  numb._state.peek_cursor = { 10, 0 }
+  -- Reset should clear everything
+  numb._state:reset()
+  assert(vim.tbl_isempty(numb._state.win_states), "win_states cleared by reset")
+  assert(numb._state.peek_cursor == nil, "peek_cursor cleared by reset")
+end
+
+function Tests.state_configure_merges_options()
+  local numb = configure()
+  -- Default centered_peeking is true, we set it to false in configure()
+  assert(numb._state.opts.centered_peeking == false, "configure merges user options")
+  assert(numb._state.opts.show_numbers == true, "configure preserves defaults")
+end
+
+-------------------------------------------------------------------------------
+-- FOLD STATE RESTORATION TESTS
+-------------------------------------------------------------------------------
+
+function Tests.fold_foldenable_restored_after_confirm()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  -- Set foldenable to true before jump
+  vim.wo.foldenable = true
+  run_cmd ":10\r"
+  assert_cursor(10, "jump completed")
+  -- foldenable should be restored to original value after confirm
+  assert(vim.wo.foldenable == true, "foldenable=true should be preserved after confirm")
+end
+
+function Tests.fold_foldenable_false_preserved()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  -- foldenable already false
+  vim.wo.foldenable = false
+  run_cmd ":10\r"
+  assert_cursor(10, "jump completed")
+  assert(vim.wo.foldenable == false, "foldenable=false should be preserved after confirm")
+end
+
+function Tests.fold_cursorline_restored_after_confirm()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  vim.wo.cursorline = false
+  run_cmd ":15\r"
+  assert_cursor(15, "jump completed")
+  assert(vim.wo.cursorline == false, "cursorline=false should be restored after confirm")
+end
+
+function Tests.fold_relativenumber_restored_after_confirm()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  vim.wo.relativenumber = true
+  run_cmd ":20\r"
+  assert_cursor(20, "jump completed")
+  assert(vim.wo.relativenumber == true, "relativenumber=true should be restored after confirm")
+end
+
+-------------------------------------------------------------------------------
+-- MULTI-WINDOW TESTS
+-------------------------------------------------------------------------------
+
+local function create_split()
+  vim.cmd "vsplit"
+  return vim.api.nvim_get_current_win()
+end
+
+local function close_other_windows()
+  vim.cmd "only"
+end
+
+function Tests.multiwin_only_active_window_affected()
+  configure()
+  reset_buffer()
+  local win1 = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(win1, { 5, 0 })
+  vim.wo[win1].number = false
+
+  local win2 = create_split()
+  vim.api.nvim_win_set_cursor(win2, { 10, 0 })
+  vim.wo[win2].number = false
+
+  -- Jump in win2
+  run_cmd ":20\r"
+  assert(vim.api.nvim_win_get_cursor(win2)[1] == 20, "win2 jumped to line 20")
+  assert(vim.wo[win2].number == false, "win2 number option restored")
+
+  -- win1 should be unaffected
+  assert(vim.api.nvim_win_get_cursor(win1)[1] == 5, "win1 cursor unchanged")
+  assert(vim.wo[win1].number == false, "win1 number option unchanged")
+
+  close_other_windows()
+end
+
+function Tests.multiwin_independent_state_per_window()
+  local numb = configure()
+  reset_buffer()
+  local win1 = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(win1, { 5, 0 })
+
+  local win2 = create_split()
+  vim.api.nvim_win_set_cursor(win2, { 15, 0 })
+
+  -- Jump in win2
+  run_cmd ":25\r"
+  assert(vim.api.nvim_win_get_cursor(win2)[1] == 25, "win2 at line 25")
+
+  -- Switch to win1 and jump there
+  vim.api.nvim_set_current_win(win1)
+  run_cmd ":10\r"
+  assert(vim.api.nvim_win_get_cursor(win1)[1] == 10, "win1 at line 10")
+
+  -- Both windows should have clean state
+  local state = numb._state
+  assert(vim.tbl_isempty(state.win_states), "all win_states cleared after both jumps")
+
+  close_other_windows()
+end
+
+function Tests.multiwin_sequential_jumps_preserve_options()
+  configure()
+  reset_buffer()
+  local win1 = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(win1, { 3, 0 })
+  vim.wo[win1].foldenable = true
+
+  local win2 = create_split()
+  vim.api.nvim_win_set_cursor(win2, { 8, 0 })
+  vim.wo[win2].foldenable = false
+
+  -- Jump in win2
+  run_cmd ":30\r"
+  assert(vim.api.nvim_win_get_cursor(win2)[1] == 30, "win2 at line 30")
+  assert(vim.wo[win2].foldenable == false, "win2 foldenable preserved")
+
+  -- Switch to win1 and jump
+  vim.api.nvim_set_current_win(win1)
+  run_cmd ":15\r"
+  assert(vim.api.nvim_win_get_cursor(win1)[1] == 15, "win1 at line 15")
+  assert(vim.wo[win1].foldenable == true, "win1 foldenable preserved")
+
+  close_other_windows()
+end
+
 local M = {}
 
 -- Run tests in sorted order for deterministic execution
