@@ -24,7 +24,7 @@ nvim --headless -u tests/init.lua -i NONE -n +"lua require('tests.run').run()" +
 
 ## Project Structure
 
-Code lives under `lua/numb/`; `init.lua` exposes the user-facing API while `log.lua` holds lightweight diagnostics helpers. Tooling configs (`stylua.toml`, `lua-format`) sit at repo root. Headless regression tests live in `tests/` (`tests/init.lua` wires Neovim, `tests/run.lua` defines scenarios).
+Code lives under `lua/numb/`; `init.lua` exposes the user-facing API. The Stylua config (`stylua.toml`) sits at the repo root. Headless regression tests live in `tests/` (`tests/init.lua` wires Neovim, `tests/run.lua` defines scenarios).
 
 ## Architecture
 
@@ -89,7 +89,6 @@ When adding tests, ensure coverage for:
 - No call parentheses for simple calls: `require "numb.log"` not `require("numb.log")`
 - Prefer descriptive local names (`peek_line`, `cursor_state`) over single letters
 - Modules addressed as `require('numb.<submodule>')`; filenames lowercase with underscores
-- Temporary `require('numb.log').info(...)` calls OK while debugging but must be removed before commit
 
 ## Commit & PR Guidelines
 

@@ -5,8 +5,6 @@ local api = vim.api
 local fn = vim.fn
 local cmd = vim.cmd
 
-local log = require "numb.log"
-
 -------------------------------------------------------------------------------
 -- Type Definitions
 -------------------------------------------------------------------------------
@@ -104,7 +102,6 @@ end
 ---@param winnr integer Window handle
 ---@param options table<string, boolean|nil> Options to set
 local function set_win_options(winnr, options)
-  log.info("set_win_options(): winnr=", winnr, ", options=", options)
   for option, value in pairs(options) do
     if value ~= nil then
       api.nvim_set_option_value(option, value, { win = winnr, scope = "local" })
@@ -116,7 +113,6 @@ end
 ---@param winnr integer Window handle
 ---@param linenr integer Target line number
 local function peek(winnr, linenr)
-  log.trace(("peek(), winnr=%d, linenr=%d"):format(winnr, linenr))
   local bufnr = api.nvim_win_get_buf(winnr)
   linenr = clamp_linenr(bufnr, linenr)
 
@@ -211,7 +207,6 @@ end
 local function parse_num_str(str, base_line)
   -- Validate input contains only expected characters
   if not str:match "^[%+%-%d]+$" then
-    log.warn("Invalid number expression: " .. str)
     return nil
   end
 
@@ -260,7 +255,6 @@ end
 
 ---Handle command line changes during Ex command input
 function numb.on_cmdline_changed()
-  log.trace "on_cmdline_changed()"
   local cmd_line = fn.getcmdline()
   local winnr = api.nvim_get_current_win()
   local pattern = "^([%+%-%d]+)" .. (state.opts.number_only and "$" or "")
@@ -284,10 +278,8 @@ end
 
 ---Handle command line exit
 function numb.on_cmdline_exit()
-  log.trace "on_cmdline_exit()"
   local winnr = api.nvim_get_current_win()
   if not is_peeking(winnr) then
-    log.debug(winnr .. " is not in peek state, returning")
     return
   end
   -- Stay at target if command was confirmed (not aborted)
