@@ -93,4 +93,8 @@ override the options again with calling `setup{...}` as mentioned above.
 
 ## Contributing
 
-Read [AGENTS.md](AGENTS.md) for repository guidelines, coding standards, and PR expectations. Before opening a pull request, run `scripts/check.sh` to ensure Stylua formatting, the headless smoke test, and the automated regression tests all pass.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow: setup, coding style, testing, commit conventions, and changelog discipline. Before opening a pull request, run `scripts/check.sh` to ensure Stylua formatting, the headless smoke test, and the automated regression tests all pass.
+
+## Changelog
+
+Release history is tracked in [CHANGELOG.md](CHANGELOG.md) following the [Keep a Changelog](https://keepachangelog.com/) format.

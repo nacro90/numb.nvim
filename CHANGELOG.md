@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Jumplist support: confirmed `:` peeks now push the origin position to the
   window jumplist, so `<C-o>` returns to the line you jumped from. Aborted
   peeks do not pollute the jumplist.
+- `CONTRIBUTING.md` documenting the contribution workflow, commit
+  conventions, and changelog discipline.
+- Release workflow guidance in `CLAUDE.md` covering SemVer, annotated
+  tags, GitHub Releases, and the rebase-not-merge policy for divergence.
 
 ### Removed
 - The bundled `numb.log` module and its file-based logger. The plugin no

@@ -86,7 +86,7 @@ When adding tests, ensure coverage for:
 ## Style
 
 - 2-space indentation, 120 column limit (see `stylua.toml`)
-- No call parentheses for simple calls: `require "numb.log"` not `require("numb.log")`
+- No call parentheses for simple calls: `require "numb"` not `require("numb")`
 - Prefer descriptive local names (`peek_line`, `cursor_state`) over single letters
 - Modules addressed as `require('numb.<submodule>')`; filenames lowercase with underscores
 
@@ -101,4 +101,49 @@ When adding tests, ensure coverage for:
 - Keep dependencies minimal—no runtime requirements outside stock Neovim/Lua
 - Prefer feature flags via `require('numb').setup{...}` over global state
 - Document new options in `README.md`
+
+## Release Workflow
+
+Versioning follows [Semantic Versioning](https://semver.org/). Changes are tracked in `CHANGELOG.md` using the [Keep a Changelog](https://keepachangelog.com/) format.
+
+### During Development
+
+Every user-facing change updates the `[Unreleased]` section of `CHANGELOG.md` in the same commit or PR. Section order: Added → Changed → Deprecated → Removed → Fixed → Security.
+
+### Cutting a Release
+
+1. Promote `[Unreleased]` to a new `[X.Y.Z] - YYYY-MM-DD` heading; leave `[Unreleased]` empty again; update the footer compare links.
+2. SemVer rules:
+   - New feature → minor bump (`1.0.0` → `1.1.0`)
+   - Bug-fix only → patch bump (`1.0.0` → `1.0.1`)
+   - Breaking public API change → major bump (`1.0.0` → `2.0.0`)
+3. Create an **annotated** tag (never lightweight — they miss author/date and break `git describe`):
+   ```bash
+   git tag -a vX.Y.Z -m "Release vX.Y.Z"
+   ```
+4. Push branch and tag separately so each step is explicit:
+   ```bash
+   git push origin master
+   git push origin vX.Y.Z
+   ```
+5. Create the GitHub Release (visible to plugin managers and Watch→Releases subscribers):
+   ```bash
+   gh release create vX.Y.Z --title "vX.Y.Z — <short slug>" --notes "<changelog entry for this version>"
+   ```
+
+### Forbidden
+
+- Force-pushing `master` or rewriting published tags.
+- Moving a published tag to a different commit.
+- Pushing without explicit user approval (see project-wide rule).
+- Lightweight tags for releases.
+
+### If Remote Has Diverged
+
+Rebase, do not merge:
+```bash
+git fetch origin
+git rebase origin/master
+```
+Verify the subsequent push is a fast-forward — `git push` output should show `A..B` (double-dot), not `+A B` (which indicates a forced update).
 
