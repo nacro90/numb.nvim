@@ -324,6 +324,49 @@ function Tests.fold_relativenumber_restored_after_confirm()
 end
 
 -------------------------------------------------------------------------------
+-- JUMPLIST TESTS
+-------------------------------------------------------------------------------
+
+function Tests.jumplist_ctrl_o_returns_to_origin()
+  configure()
+  reset_buffer()
+  -- Drain any pending scheduled callbacks from earlier tests before clearing jumps.
+  vim.wait(50, function()
+    return false
+  end, 10, false)
+  vim.cmd "clearjumps"
+  vim.api.nvim_win_set_cursor(0, { 5, 0 })
+  run_cmd ":20\r"
+  -- Wait for scheduled callback to apply final cursor + jumplist push
+  vim.wait(100, function()
+    return false
+  end, 10, false)
+  assert_cursor(20, "jumped to 20")
+  local jumps = vim.fn.getjumplist()[1]
+  assert(#jumps > 0, "jumplist must have at least one entry after confirmed peek")
+  local last = jumps[#jumps]
+  assert(last.lnum == 5, ("expected origin (line 5) in jumplist, got %d"):format(last.lnum))
+  -- C-o should travel back to origin
+  feedkeys "<C-o>"
+  wait_until_idle()
+  assert_cursor(5, "C-o returns to origin")
+end
+
+function Tests.jumplist_aborted_peek_no_entry()
+  configure()
+  reset_buffer()
+  vim.wait(50, function()
+    return false
+  end, 10, false)
+  vim.cmd "clearjumps"
+  vim.api.nvim_win_set_cursor(0, { 5, 0 })
+  run_cmd ":20<C-c>"
+  assert_cursor(5, "aborted peek leaves cursor at origin")
+  local jumps = vim.fn.getjumplist()[1]
+  assert(#jumps == 0, ("aborted peek must not add jump entry, got %d"):format(#jumps))
+end
+
+-------------------------------------------------------------------------------
 -- MULTI-WINDOW TESTS
 -------------------------------------------------------------------------------
 

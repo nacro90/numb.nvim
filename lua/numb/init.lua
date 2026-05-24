@@ -165,6 +165,7 @@ local function unpeek(winnr, stay)
 
   if stay then
     local final_cursor = state.peek_cursor
+    local origin_cursor = orig_state.cursor
     state.peek_cursor = nil
     if final_cursor then
       vim.schedule(function()
@@ -173,6 +174,11 @@ local function unpeek(winnr, stay)
         end
         local previous_win = api.nvim_get_current_win()
         api.nvim_set_current_win(winnr)
+        -- Vim's native :N moves the cursor but does not push to the jumplist;
+        -- force cursor back to origin then use G-motion so the origin is pushed
+        -- to the jumplist (so <C-o> returns to it).
+        api.nvim_win_set_cursor(winnr, origin_cursor)
+        cmd(("normal! %dG"):format(final_cursor[1]))
         api.nvim_win_set_cursor(winnr, final_cursor)
         -- Unfold at cursor position
         cmd "normal! zv"
