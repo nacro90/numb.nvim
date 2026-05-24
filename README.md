@@ -36,9 +36,14 @@ Plug 'nacro90/numb.nvim'
 ```lua
 {
   'nacro90/numb.nvim',
-  config = function()
-    require('numb').setup()
-  end,
+}
+
+-- or optionally pass `opts` to customize config
+{
+  'nacro90/numb.nvim',
+  opts = {
+    -- customizable config here, see Options below
+  }
 }
 ```
 
