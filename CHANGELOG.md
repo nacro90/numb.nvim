@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `require('numb').enable(opts?)` and `require('numb').is_enabled()` Lua
   API. `enable()` preserves previously configured options, so you no
   longer need to re-call `setup()` after `disable()`.
+- Window-local `vim.w.numb_peeking` flag (set during active peek, cleared
+  on confirm or abort) for statusline integrations. Scope is per window
+  so split views of the same buffer never cross-flag each other.
+- `require('numb').is_peeking(winnr?)` Lua API returning the same
+  information programmatically.
 - `CONTRIBUTING.md` documenting the contribution workflow, commit
   conventions, and changelog discipline.
 - Release workflow guidance in `CLAUDE.md` covering SemVer, annotated

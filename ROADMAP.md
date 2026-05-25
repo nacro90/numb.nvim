@@ -34,17 +34,6 @@ single-line `:N` jumps, and this extends the same principle to ranges.
 **Why P1:** Addresses a real UX gap with no native Neovim equivalent.
 Natural extension of the plugin's "peek before commit" philosophy.
 
-### P2 — `:Numb` user command 📋
-
-Single command with `enable | disable | toggle` subcommands plus tab
-completion. Adds public `numb.enable()` and `numb.is_enabled()` Lua API
-mirroring the existing `numb.disable()`.
-
-**Why P2:** Discoverable runtime control is expected by power users and
-plugin integrators (which-key, lazy.nvim keys). Subcommand pattern
-follows modern Neovim conventions (`:Mason`, `:Lazy`, `:Telescope`).
-Low risk, ~25 LOC.
-
 ### P3 — Filetype/buftype disable filter 📋
 
 Two new options:
@@ -62,22 +51,6 @@ meaningful there.
 
 **Why P3:** Removes a real but narrow pain point (terminal flicker).
 Tiny change, opt-in for filetypes, conservative default for buftypes.
-
-### P4 — `vim.b.numb_peeking` statusline flag 📋
-
-Set `vim.b[bufnr].numb_peeking = true` during peek, clear on unpeek.
-Expose public `numb.is_peeking(winnr?)`. Enables lualine/heirline
-components like:
-
-```lua
-{
-  function() return vim.b.numb_peeking and "👁" or "" end,
-}
-```
-
-**Why P4:** Trivial change (3 LOC), but value is mostly cosmetic.
-Useful for users who customize their statusline; invisible to everyone
-else.
 
 ---
 
@@ -105,8 +78,12 @@ deferred, or dropped after discussion.
 ## Done
 
 See [CHANGELOG.md](CHANGELOG.md) for shipped features. Recent
-highlights:
+highlights (in `[Unreleased]`, next release will tag them):
 
+- Window-local `vim.w.numb_peeking` flag + `numb.is_peeking(winnr?)`
+  Lua API for statusline integrations.
+- `:Numb` user command with `enable | disable | toggle` subcommands +
+  `numb.enable()` / `numb.is_enabled()` Lua API.
 - Jumplist support for `<C-o>` after confirmed peek.
 - Unused logging module removed.
 - CONTRIBUTING.md and release workflow documented.

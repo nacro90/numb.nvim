@@ -141,6 +141,13 @@ local function peek(winnr, linenr)
   if state.opts.centered_peeking then
     cmd "normal! zz"
   end
+
+  -- Expose a window-scoped flag so statusline integrations can render a
+  -- "currently peeking" indicator. Window-scoped (not buffer-scoped) so the
+  -- flag does not leak across split windows sharing the same buffer.
+  if api.nvim_win_is_valid(winnr) then
+    vim.w[winnr].numb_peeking = true
+  end
 end
 
 ---Restore window state after peeking
@@ -191,6 +198,11 @@ local function unpeek(winnr, stay)
     state.peek_cursor = nil
   end
   state.win_states[winnr] = nil
+
+  -- Clear the statusline indicator flag (set in peek()).
+  if api.nvim_win_is_valid(winnr) then
+    vim.w[winnr].numb_peeking = nil
+  end
 end
 
 ---Check if window is currently peeking
@@ -365,6 +377,21 @@ function numb.is_enabled()
   return augroup_id ~= nil
 end
 
+---Returns true when the given (or current) window is currently peeking.
+---Reads the same `vim.w.numb_peeking` flag exposed to statusline integrations,
+---so the two never diverge.
+---@param winnr integer|nil Window handle. `nil` or `0` => current window.
+---@return boolean
+function numb.is_peeking(winnr)
+  if winnr == nil or winnr == 0 then
+    winnr = api.nvim_get_current_win()
+  end
+  if not api.nvim_win_is_valid(winnr) then
+    return false
+  end
+  return vim.w[winnr].numb_peeking == true
+end
+
 ---Enable the plugin (re-install autocommands using the current config).
 ---Safe to call when already enabled.
 ---@param user_opts NumbConfig|nil Optional config override
@@ -397,5 +424,7 @@ end
 
 -- Expose state for testing (underscore prefix = internal)
 numb._state = state
+numb._peek = peek
+numb._unpeek = unpeek
 
 return numb

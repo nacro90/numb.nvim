@@ -324,6 +324,120 @@ function Tests.fold_relativenumber_restored_after_confirm()
 end
 
 -------------------------------------------------------------------------------
+-- PEEKING FLAG TESTS
+-------------------------------------------------------------------------------
+
+function Tests.peeking_flag_unset_when_not_peeking()
+  local numb = configure()
+  reset_buffer()
+  local win = vim.api.nvim_get_current_win()
+  assert(vim.w[win].numb_peeking == nil, "flag must be nil before any peek")
+  assert(numb.is_peeking() == false, "numb.is_peeking() returns false initially")
+end
+
+function Tests.peeking_flag_cleared_after_confirm()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local win = vim.api.nvim_get_current_win()
+  run_cmd ":15\r"
+  vim.wait(100, function()
+    return false
+  end, 10, false)
+  assert(vim.w[win].numb_peeking == nil, "flag must be cleared after confirmed jump")
+  assert(numb.is_peeking(win) == false, "is_peeking false after confirm")
+end
+
+function Tests.peeking_flag_cleared_after_abort()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local win = vim.api.nvim_get_current_win()
+  run_cmd ":15<C-c>"
+  assert(vim.w[win].numb_peeking == nil, "flag must be cleared after aborted peek")
+  assert(numb.is_peeking(win) == false, "is_peeking false after abort")
+end
+
+function Tests.peeking_flag_window_scoped_not_buffer_scoped()
+  -- Two splits viewing the same buffer must not cross-flag each other.
+  configure()
+  reset_buffer()
+  local win1 = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(win1, { 5, 0 })
+  vim.cmd "vsplit"
+  local win2 = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(win2, { 10, 0 })
+  assert(vim.api.nvim_win_get_buf(win1) == vim.api.nvim_win_get_buf(win2), "both splits share the buffer")
+
+  -- Trigger peek only in win2 (current).
+  run_cmd ":20\r"
+  vim.wait(100, function()
+    return false
+  end, 10, false)
+
+  -- Both flags must be cleared post-confirm; importantly, win1 must NEVER have
+  -- been flagged while peeking in win2 (buffer-local flag would have leaked).
+  assert(vim.w[win1].numb_peeking == nil, "win1 flag stays nil throughout")
+  assert(vim.w[win2].numb_peeking == nil, "win2 flag cleared after confirm")
+  vim.cmd "only"
+end
+
+function Tests.peeking_flag_default_uses_current_window()
+  local numb = configure()
+  reset_buffer()
+  assert(numb.is_peeking() == false, "is_peeking() with no arg defaults to current window")
+end
+
+function Tests.peeking_flag_is_true_during_active_peek()
+  -- Use the exposed internal _peek/_unpeek helpers to observe the flag
+  -- mid-peek (impossible via feedkeys, since cmdline mode is synchronous).
+  local numb = configure()
+  reset_buffer()
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(win, { 1, 0 })
+
+  numb._peek(win, 15)
+  assert(vim.w[win].numb_peeking == true, "flag must be true during active peek")
+  assert(numb.is_peeking(win) == true, "is_peeking() returns true during active peek")
+  assert(numb.is_peeking() == true, "is_peeking() with no arg also detects current peek")
+  assert(numb.is_peeking(0) == true, "is_peeking(0) treats 0 as current window per nvim convention")
+
+  numb._unpeek(win, false)
+  assert(vim.w[win].numb_peeking == nil, "flag cleared after _unpeek")
+end
+
+function Tests.peeking_flag_stays_set_across_multi_keystroke_peek()
+  -- Each CmdlineChanged for ":1" -> ":12" -> ":123" calls unpeek then peek again;
+  -- the observable state after each keystroke must still report peeking=true.
+  local numb = configure()
+  reset_buffer()
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(win, { 1, 0 })
+
+  numb._peek(win, 1)
+  assert(vim.w[win].numb_peeking == true, "flag true after first peek")
+
+  -- Simulate cmdline update that retargets to a new line: unpeek + peek
+  numb._unpeek(win, false)
+  numb._peek(win, 12)
+  assert(vim.w[win].numb_peeking == true, "flag still true after retargeting peek")
+
+  numb._unpeek(win, false)
+  numb._peek(win, 23)
+  assert(vim.w[win].numb_peeking == true, "flag still true after second retarget")
+
+  numb._unpeek(win, false)
+  assert(vim.w[win].numb_peeking == nil, "flag cleared once all peeking ends")
+end
+
+function Tests.peeking_flag_invalid_winnr_returns_false()
+  local numb = configure()
+  reset_buffer()
+  -- Use a large bogus winnr that cannot correspond to a real window
+  assert(numb.is_peeking(9999999) == false, "is_peeking() on invalid winnr returns false (no error)")
+end
+
+-------------------------------------------------------------------------------
 -- USER COMMAND TESTS
 -------------------------------------------------------------------------------
 

@@ -81,11 +81,33 @@ The matching Lua API is:
 ```lua
 require('numb').disable()
 require('numb').enable()
-require('numb').is_enabled()  -- returns boolean
+require('numb').is_enabled()           -- returns boolean
+require('numb').is_peeking(winnr?)     -- returns boolean (current window if omitted)
 ```
 
 `enable()` preserves the options previously passed to `setup{...}`, so you do
 not need to re-call `setup()` after a `disable()`.
+
+### Statusline Integration
+
+While a peek is active, numb.nvim sets the window-local flag
+`vim.w.numb_peeking = true`. The flag is cleared (set back to `nil`) as soon
+as the peek ends, whether confirmed or aborted. The scope is **per window**
+so two splits viewing the same buffer never cross-flag each other.
+
+A minimal lualine component using the flag:
+
+```lua
+require('lualine').setup{
+  sections = {
+    lualine_x = {
+      function() return vim.w.numb_peeking and 'peek' or '' end,
+    },
+  },
+}
+```
+
+Programmatic consumers can call `require('numb').is_peeking()` instead.
 
 ### Options
 
