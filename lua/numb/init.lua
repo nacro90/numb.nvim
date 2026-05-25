@@ -293,21 +293,19 @@ end
 local augroup_id = nil
 
 ---Install (or reinstall) the CmdlineChanged/CmdlineLeave autocommands.
+---`clear = true` on the augroup makes this idempotent across repeated calls
+---(re-`setup()` or `disable` → `enable`).
 local function install_autocmds()
   augroup_id = api.nvim_create_augroup("numb", { clear = true })
   api.nvim_create_autocmd("CmdlineChanged", {
     group = augroup_id,
     pattern = ":",
-    callback = function()
-      numb.on_cmdline_changed()
-    end,
+    callback = numb.on_cmdline_changed,
   })
   api.nvim_create_autocmd("CmdlineLeave", {
     group = augroup_id,
     pattern = ":",
-    callback = function()
-      numb.on_cmdline_exit()
-    end,
+    callback = numb.on_cmdline_exit,
   })
 end
 
@@ -339,8 +337,9 @@ local subcommand_tbl = {
 }
 
 ---Install (or reinstall) the `:Numb` user command.
+---`nvim_create_user_command` silently replaces an existing command with the
+---same name, so this is safe to call repeatedly.
 local function install_user_command()
-  pcall(api.nvim_del_user_command, "Numb")
   api.nvim_create_user_command("Numb", function(o)
     local key = o.fargs[1] or "toggle"
     local subcommand = subcommand_tbl[key]
