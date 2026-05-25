@@ -77,8 +77,9 @@ deferred, or dropped after discussion.
 
 ## Done
 
-See [CHANGELOG.md](CHANGELOG.md) for shipped features. Recent
-highlights (in `[Unreleased]`, next release will tag them):
+See [CHANGELOG.md](CHANGELOG.md) for shipped features.
+
+### v1.1.0 — 2026-05-25
 
 - Window-local `vim.w.numb_peeking` flag + `numb.is_peeking(winnr?)`
   Lua API for statusline integrations.
@@ -86,4 +87,8 @@ highlights (in `[Unreleased]`, next release will tag them):
   `numb.enable()` / `numb.is_enabled()` Lua API.
 - Jumplist support for `<C-o>` after confirmed peek.
 - Unused logging module removed.
-- CONTRIBUTING.md and release workflow documented.
+- CONTRIBUTING.md, ROADMAP.md, and release workflow documented.
+
+### v1.0.0 — 2026-05-25
+
+First tagged stable release. See `CHANGELOG.md` for the full list.

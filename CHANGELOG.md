@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-25
+
 ### Added
 - Jumplist support: confirmed `:` peeks now push the origin position to the
   window jumplist, so `<C-o>` returns to the line you jumped from. Aborted
@@ -21,9 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on confirm or abort) for statusline integrations. Scope is per window
   so split views of the same buffer never cross-flag each other.
 - `require('numb').is_peeking(winnr?)` Lua API returning the same
-  information programmatically.
+  information programmatically. Follows the Neovim convention where `nil`
+  or `0` means the current window.
 - `CONTRIBUTING.md` documenting the contribution workflow, commit
   conventions, and changelog discipline.
+- `ROADMAP.md` describing planned features by priority.
 - Release workflow guidance in `CLAUDE.md` covering SemVer, annotated
   tags, GitHub Releases, and the rebase-not-merge policy for divergence.
 
@@ -75,5 +79,6 @@ years of iterative improvements.
 - Replaced the previous `load()`-based arithmetic evaluator with a manual
   parser to eliminate code-execution risk from malformed input.
 
-[Unreleased]: https://github.com/nacro90/numb.nvim/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/nacro90/numb.nvim/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/nacro90/numb.nvim/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/nacro90/numb.nvim/releases/tag/v1.0.0
