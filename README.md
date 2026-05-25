@@ -67,7 +67,25 @@ Disable the plugin globally:
 require('numb').disable()
 ```
 
-After you disable the plugin, you can re-enable it by calling the `setup` again.
+You can also control the plugin at runtime through the `:Numb` user command,
+which supports tab-completed subcommands:
+
+```vim
+:Numb disable   " stop peeking
+:Numb enable    " resume peeking (preserves your config)
+:Numb toggle    " flip the current state (default when no argument is given)
+```
+
+The matching Lua API is:
+
+```lua
+require('numb').disable()
+require('numb').enable()
+require('numb').is_enabled()  -- returns boolean
+```
+
+`enable()` preserves the options previously passed to `setup{...}`, so you do
+not need to re-call `setup()` after a `disable()`.
 
 ### Options
 
@@ -87,9 +105,9 @@ After running `setup`, you are good to go. You can try with entering a number to
 the vim command line like `:3`.
 
 When you disable numb, your options are kept in the module level. So after you
-disable it, if you call `setup()` with no overrides, numb will be enabled with
-your customized options (or default ones if you don't have any). You can
-override the options again with calling `setup{...}` as mentioned above.
+disable it, calling `enable()` (or `setup()` again) restores the plugin with
+your customized options. You can override the options at any time by calling
+`setup{...}` again or by passing them to `enable{...}`.
 
 ## Contributing
 

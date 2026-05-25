@@ -288,27 +288,112 @@ function numb.on_cmdline_exit()
   unpeek(winnr, stay)
 end
 
+-- Augroup handle is non-nil while the plugin is active.
+---@type integer|nil
+local augroup_id = nil
+
+---Install (or reinstall) the CmdlineChanged/CmdlineLeave autocommands.
+local function install_autocmds()
+  augroup_id = api.nvim_create_augroup("numb", { clear = true })
+  api.nvim_create_autocmd("CmdlineChanged", {
+    group = augroup_id,
+    pattern = ":",
+    callback = function()
+      numb.on_cmdline_changed()
+    end,
+  })
+  api.nvim_create_autocmd("CmdlineLeave", {
+    group = augroup_id,
+    pattern = ":",
+    callback = function()
+      numb.on_cmdline_exit()
+    end,
+  })
+end
+
+---@class NumbSubcommand
+---@field impl fun() Subcommand implementation
+
+---Dispatch table for `:Numb` subcommands.
+---@type table<string, NumbSubcommand>
+local subcommand_tbl = {
+  enable = {
+    impl = function()
+      numb.enable()
+    end,
+  },
+  disable = {
+    impl = function()
+      numb.disable()
+    end,
+  },
+  toggle = {
+    impl = function()
+      if numb.is_enabled() then
+        numb.disable()
+      else
+        numb.enable()
+      end
+    end,
+  },
+}
+
+---Install (or reinstall) the `:Numb` user command.
+local function install_user_command()
+  pcall(api.nvim_del_user_command, "Numb")
+  api.nvim_create_user_command("Numb", function(o)
+    local key = o.fargs[1] or "toggle"
+    local subcommand = subcommand_tbl[key]
+    if not subcommand then
+      vim.notify("[numb] unknown subcommand: " .. key, vim.log.levels.ERROR)
+      return
+    end
+    subcommand.impl()
+  end, {
+    nargs = "?",
+    desc = "Control numb.nvim (enable | disable | toggle)",
+    complete = function(arg_lead)
+      return vim.tbl_filter(function(key)
+        return key:find(arg_lead, 1, true) == 1
+      end, vim.tbl_keys(subcommand_tbl))
+    end,
+  })
+end
+
+---Returns true when the plugin's autocommands are installed.
+---@return boolean
+function numb.is_enabled()
+  return augroup_id ~= nil
+end
+
+---Enable the plugin (re-install autocommands using the current config).
+---Safe to call when already enabled.
+---@param user_opts NumbConfig|nil Optional config override
+function numb.enable(user_opts)
+  if user_opts then
+    state:configure(user_opts)
+  end
+  if numb.is_enabled() then
+    return
+  end
+  install_autocmds()
+end
+
 ---Setup the plugin with optional configuration
 ---@param user_opts NumbConfig|nil Configuration options
 function numb.setup(user_opts)
   state:configure(user_opts)
-  local group = api.nvim_create_augroup("numb", { clear = true })
-  api.nvim_create_autocmd("CmdlineChanged", {
-    group = group,
-    pattern = ":",
-    callback = numb.on_cmdline_changed,
-  })
-  api.nvim_create_autocmd("CmdlineLeave", {
-    group = group,
-    pattern = ":",
-    callback = numb.on_cmdline_exit,
-  })
+  install_autocmds()
+  install_user_command()
 end
 
 ---Disable the plugin and clear state
 function numb.disable()
   state:reset()
-  pcall(api.nvim_del_augroup_by_name, "numb")
+  if augroup_id then
+    pcall(api.nvim_del_augroup_by_id, augroup_id)
+    augroup_id = nil
+  end
 end
 
 -- Expose state for testing (underscore prefix = internal)

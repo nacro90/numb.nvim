@@ -324,6 +324,92 @@ function Tests.fold_relativenumber_restored_after_confirm()
 end
 
 -------------------------------------------------------------------------------
+-- USER COMMAND TESTS
+-------------------------------------------------------------------------------
+
+function Tests.user_command_is_registered_after_setup()
+  configure()
+  local cmds = vim.api.nvim_get_commands {}
+  assert(cmds.Numb, ":Numb user command should be registered after setup()")
+end
+
+function Tests.user_command_disable_stops_peeking()
+  local numb = configure()
+  reset_buffer()
+  vim.cmd "Numb disable"
+  assert(not numb.is_enabled(), "is_enabled returns false after :Numb disable")
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  -- After disable, win_states must remain empty during :10 typing because
+  -- the CmdlineChanged autocmd is gone. Vim's native :10 still moves cursor.
+  run_cmd ":10\r"
+  assert(vim.tbl_isempty(numb._state.win_states), "no peek state recorded while disabled")
+end
+
+function Tests.user_command_enable_restores_peeking()
+  local numb = configure()
+  vim.cmd "Numb disable"
+  assert(not numb.is_enabled(), "disabled")
+  vim.cmd "Numb enable"
+  assert(numb.is_enabled(), "is_enabled returns true after :Numb enable")
+end
+
+function Tests.user_command_toggle_flips_state()
+  local numb = configure()
+  local before = numb.is_enabled()
+  vim.cmd "Numb toggle"
+  assert(numb.is_enabled() ~= before, "toggle flips state")
+  vim.cmd "Numb toggle"
+  assert(numb.is_enabled() == before, "second toggle returns to original state")
+end
+
+function Tests.user_command_no_arg_defaults_to_toggle()
+  local numb = configure()
+  local before = numb.is_enabled()
+  vim.cmd "Numb"
+  assert(numb.is_enabled() ~= before, "bare :Numb defaults to toggle")
+  -- Restore state for subsequent tests
+  vim.cmd "Numb"
+end
+
+function Tests.user_command_unknown_subcommand_notifies_error()
+  configure()
+  local captured = nil
+  local orig_notify = vim.notify
+  vim.notify = function(msg, level)
+    captured = { msg = msg, level = level }
+  end
+  pcall(vim.cmd, "Numb bogus")
+  vim.notify = orig_notify
+  assert(captured ~= nil, "vim.notify must be called for unknown subcommand")
+  assert(captured.level == vim.log.levels.ERROR, "notification must be at ERROR level")
+  assert(captured.msg:find "bogus", "error message must mention the bad subcommand name")
+end
+
+function Tests.user_command_enable_is_idempotent()
+  local numb = configure()
+  assert(numb.is_enabled(), "starts enabled")
+  vim.cmd "Numb enable"
+  vim.cmd "Numb enable"
+  assert(numb.is_enabled(), "stays enabled after repeated enable")
+end
+
+function Tests.user_command_disable_then_jump_no_state_leak()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  run_cmd ":5\r"
+  -- Now peek is confirmed; state.win_states should be empty after schedule callback
+  vim.wait(100, function()
+    return false
+  end, 10, false)
+  vim.cmd "Numb disable"
+  assert(vim.tbl_isempty(numb._state.win_states), "win_states empty after disable")
+  assert(numb._state.peek_cursor == nil, "peek_cursor nil after disable")
+  -- Re-enable for following tests
+  vim.cmd "Numb enable"
+end
+
+-------------------------------------------------------------------------------
 -- JUMPLIST TESTS
 -------------------------------------------------------------------------------
 

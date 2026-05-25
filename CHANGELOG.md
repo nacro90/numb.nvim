@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Jumplist support: confirmed `:` peeks now push the origin position to the
   window jumplist, so `<C-o>` returns to the line you jumped from. Aborted
   peeks do not pollute the jumplist.
+- `:Numb` user command with `enable | disable | toggle` subcommands and tab
+  completion. Bare `:Numb` defaults to `toggle`. An unknown subcommand
+  triggers a `vim.notify` error.
+- `require('numb').enable(opts?)` and `require('numb').is_enabled()` Lua
+  API. `enable()` preserves previously configured options, so you no
+  longer need to re-call `setup()` after `disable()`.
 - `CONTRIBUTING.md` documenting the contribution workflow, commit
   conventions, and changelog discipline.
 - Release workflow guidance in `CLAUDE.md` covering SemVer, annotated
