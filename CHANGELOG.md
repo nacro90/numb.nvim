@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `setup()` now reports invalid configuration instead of accepting it silently.
+  An unknown option name is ignored with a warning, and a value of the wrong
+  type falls back to its default with a warning. Previously both were accepted
+  without any message, so a typo such as `show_nubmers` looked like it had
+  worked (#26). Invalid configuration never raises, so a typo cannot leave the
+  plugin uninstalled.
+
+### Fixed
+- Confirming a command that deletes lines near the end of the buffer, such as
+  `:38,40d` in a 40 line buffer, no longer reports
+  `Invalid cursor line: out of range`. The jump is applied after the command has
+  run, so the target is now clamped to the buffer as it is at that point.
+- `disable()` during an active peek no longer leaves the peeking window behind.
+  Previously the `number`, `cursorline`, `foldenable` and `relativenumber`
+  values used while peeking stayed applied, the cursor stayed on the peeked
+  line, and `vim.w.numb_peeking` stayed set, so a statusline using
+  `is_peeking()` reported a peek forever.
+- Peeking in a background window no longer scrolls the window you are actually
+  in. View restoration and centering now target the peeked window rather than
+  the current one.
+
 ## [1.1.0] - 2026-05-25
 
 ### Added

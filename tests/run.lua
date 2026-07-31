@@ -223,7 +223,8 @@ function Tests.number_only_true_ignores_substitution_pattern()
   -- With number_only=true, :10s should NOT be recognized as a line number
   -- So Vim's native substitute command runs (which fails, but we catch that)
   -- The important thing is cursor doesn't move from peek
-  local ok = pcall(run_cmd, ":10s\r")
+  -- The substitute itself is expected to fail; its result is deliberately ignored.
+  pcall(run_cmd, ":10s\r")
   -- Command may fail (invalid substitute), but cursor should be at 1
   assert_cursor(1, "number_only=true: cursor stays at original (no peek)")
 end
@@ -579,6 +580,22 @@ local function close_other_windows()
   vim.cmd "only"
 end
 
+local function topline_of(win)
+  return vim.api.nvim_win_call(win, vim.fn.winsaveview).topline
+end
+
+-- Pin `anchor` to the top of `win` and return the resulting topline. A short
+-- peek from such a position does not scroll on its own, which is what makes
+-- centering observable: Vim centers a long jump regardless of the setting, so a
+-- long jump cannot tell centered_peeking apart.
+local function pin_topline(win, anchor)
+  vim.api.nvim_win_set_cursor(win, { anchor, 0 })
+  vim.api.nvim_win_call(win, function()
+    vim.cmd "normal! zt"
+  end)
+  return topline_of(win)
+end
+
 function Tests.multiwin_only_active_window_affected()
   configure()
   reset_buffer()
@@ -652,7 +669,340 @@ function Tests.multiwin_sequential_jumps_preserve_options()
   close_other_windows()
 end
 
+-------------------------------------------------------------------------------
+-- BUFFER SHRINK TESTS
+-------------------------------------------------------------------------------
+
+-- Wraps vim.schedule so errors raised inside numb's deferred callback become
+-- observable from the test body. Without this they only reach stderr, which the
+-- pcall in M.run() cannot see because the callback fires on a later loop tick.
+local function collect_scheduled_errors(fn)
+  local original_schedule = vim.schedule
+  local errors = {}
+  local scheduled = 0
+  local completed = 0
+  vim.schedule = function(callback)
+    scheduled = scheduled + 1
+    original_schedule(function()
+      local ok, err = pcall(callback)
+      completed = completed + 1
+      if not ok then
+        table.insert(errors, tostring(err))
+      end
+    end)
+  end
+  local ok, err = pcall(fn)
+  -- Wait until every scheduled callback has actually run instead of sleeping a
+  -- fixed interval. A late callback would otherwise fire after vim.schedule is
+  -- restored below and append an error nobody ever inspects. Scheduling happens
+  -- synchronously inside `fn`, so `scheduled` is already final here.
+  -- Note this captures errors from *any* vim.schedule callback in the window,
+  -- not only the plugin's; under `-u tests/init.lua -i NONE` nothing else
+  -- schedules, and the counts below let callers confirm what they expected ran.
+  vim.wait(1000, function()
+    return completed >= scheduled
+  end, 10, false)
+  vim.schedule = original_schedule
+  if not ok then
+    error(err)
+  end
+  return { errors = errors, scheduled = scheduled, completed = completed }
+end
+
+function Tests.buffer_shrink_range_delete_near_eof_does_not_error()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local result = collect_scheduled_errors(function()
+    run_cmd ":38,40d\r"
+  end)
+  assert(result.scheduled > 0, "the deferred jump must actually have been scheduled")
+  assert(#result.errors == 0, ("deferred callback raised: %s"):format(table.concat(result.errors, "; ")))
+  assert(vim.api.nvim_buf_line_count(0) == 37, "three lines deleted")
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+  assert(line >= 1 and line <= 37, ("cursor must stay inside buffer, got %d"):format(line))
+end
+
+function Tests.buffer_shrink_delete_invalidating_origin_does_not_error()
+  configure()
+  reset_buffer()
+  -- Origin (39) is what the deferred callback restores first; the command below
+  -- shrinks the buffer to a single line, so the origin itself goes out of range.
+  vim.api.nvim_win_set_cursor(0, { 39, 0 })
+  local result = collect_scheduled_errors(function()
+    run_cmd ":1,39d\r"
+  end)
+  assert(result.scheduled > 0, "the deferred jump must actually have been scheduled")
+  assert(#result.errors == 0, ("deferred callback raised: %s"):format(table.concat(result.errors, "; ")))
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+  local count = vim.api.nvim_buf_line_count(0)
+  assert(line >= 1 and line <= count, ("cursor must stay inside buffer, got %d of %d"):format(line, count))
+end
+
+-------------------------------------------------------------------------------
+-- DISABLE DURING ACTIVE PEEK TESTS
+-------------------------------------------------------------------------------
+
+function Tests.disable_during_active_peek_restores_window_state()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  vim.wo.number = false
+  vim.wo.cursorline = false
+  vim.wo.foldenable = true
+  -- Set explicitly rather than relying on whatever leaked from an earlier test.
+  -- Peeking forces this off (hide_relativenumbers defaults to true), so
+  -- restoring it to true is a real assertion rather than a coincidence.
+  vim.wo.relativenumber = true
+
+  numb._peek(vim.api.nvim_get_current_win(), 25)
+  assert(numb.is_peeking(), "peek must be active before disable")
+
+  numb.disable()
+
+  assert(vim.wo.number == false, "number restored after disable during peek")
+  assert(vim.wo.cursorline == false, "cursorline restored after disable during peek")
+  assert(vim.wo.foldenable == true, "foldenable restored after disable during peek")
+  assert_cursor(1, "cursor restored to origin after disable during peek")
+  assert(vim.wo.relativenumber == true, "relativenumber restored after disable during peek")
+  assert(vim.w.numb_peeking == nil, "peeking flag cleared after disable during peek")
+  assert(not numb.is_peeking(), "is_peeking false after disable during peek")
+end
+
+function Tests.disable_during_peek_in_background_window_restores_it()
+  local numb = configure()
+  reset_buffer()
+  local peeked_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(peeked_win, { 1, 0 })
+  vim.wo[peeked_win].number = false
+  vim.wo[peeked_win].cursorline = false
+
+  numb._peek(peeked_win, 30)
+
+  -- Leave the peeking window, so restoration has to target a window that is no
+  -- longer current. This is what exposes view restoration acting on the wrong
+  -- window.
+  local other_win = create_split()
+  assert(other_win ~= peeked_win, "split must be a different window")
+  local topline_before = pin_topline(other_win, 40)
+  -- Guard against a vacuous pass: if the other window were already at topline 1
+  -- the assertion below could not detect the wrong window being scrolled.
+  assert(topline_before > 1, ("setup must scroll the other window, topline is %d"):format(topline_before))
+
+  numb.disable()
+
+  assert(vim.wo[peeked_win].number == false, "background window number restored")
+  assert(vim.wo[peeked_win].cursorline == false, "background window cursorline restored")
+  assert(vim.api.nvim_win_get_cursor(peeked_win)[1] == 1, "background window cursor restored to origin")
+  assert(vim.w[peeked_win].numb_peeking == nil, "background window peeking flag cleared")
+
+  local topline_after = topline_of(other_win)
+  assert(
+    topline_after == topline_before,
+    ("disable() must not scroll the current window, topline %d became %d"):format(topline_before, topline_after)
+  )
+
+  close_other_windows()
+end
+
+function Tests.disable_after_peeked_window_closed_still_disables()
+  local numb = configure()
+  reset_buffer()
+  local closed_win = create_split()
+  numb._peek(closed_win, 20)
+  vim.api.nvim_win_close(closed_win, true)
+  assert(not vim.api.nvim_win_is_valid(closed_win), "window is gone before disable")
+
+  local ok, err = pcall(numb.disable)
+
+  assert(ok, ("disable() must not raise on a stale window handle, got %s"):format(tostring(err)))
+  assert(not numb.is_enabled(), "disable() must complete teardown even after a stale window")
+  assert(vim.tbl_isempty(numb._state.win_states), "win_states cleared despite the stale window")
+
+  close_other_windows()
+end
+
+-------------------------------------------------------------------------------
+-- CENTERED PEEKING TESTS
+-------------------------------------------------------------------------------
+
+-- Every other test forces centered_peeking off for deterministic cursor checks,
+-- so the default (on) would otherwise never be exercised even though it is the
+-- path every real user hits.
+
+-- A buffer much taller than the window, so scrolling has room in both
+-- directions and the assertions are not distorted by either buffer end.
+local function reset_tall_buffer()
+  vim.cmd "enew!"
+  local lines = {}
+  for i = 1, 500 do
+    lines[i] = ("line %03d"):format(i)
+  end
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+  vim.bo.modified = false
+end
+
+function Tests.centered_peeking_centers_the_peeked_line()
+  local numb = configure { centered_peeking = true }
+  reset_tall_buffer()
+  local win = vim.api.nvim_get_current_win()
+  local height = vim.api.nvim_win_get_height(win)
+  local anchor = 250
+  local target = anchor + 5
+  local topline_before = pin_topline(win, anchor)
+
+  numb._peek(win, target)
+
+  local topline_after = topline_of(win)
+  local offset = target - topline_after
+  local middle = math.floor(height / 2)
+  assert(
+    topline_after < topline_before,
+    ("centering must scroll the window, topline stayed at %d"):format(topline_after)
+  )
+  assert(
+    math.abs(offset - middle) <= 1,
+    ("peeked line must sit mid window: topline %d, height %d, offset %d, expected about %d"):format(
+      topline_after,
+      height,
+      offset,
+      middle
+    )
+  )
+
+  numb._unpeek(win, false)
+end
+
+function Tests.centered_peeking_only_scrolls_the_peeked_window()
+  local numb = configure { centered_peeking = true }
+  reset_tall_buffer()
+  local peeked_win = vim.api.nvim_get_current_win()
+  local peeked_topline_before = pin_topline(peeked_win, 250)
+
+  -- Move to another window before peeking, so centering has to happen in a
+  -- window that is not the current one.
+  local other_win = create_split()
+  local other_topline_before = pin_topline(other_win, 100)
+  assert(other_topline_before ~= peeked_topline_before, "the two windows must start at different toplines")
+
+  numb._peek(peeked_win, 255)
+
+  local peeked_topline_after = topline_of(peeked_win)
+  local other_topline_after = topline_of(other_win)
+  assert(
+    peeked_topline_after < peeked_topline_before,
+    ("the peeked window must be centered, topline stayed at %d"):format(peeked_topline_after)
+  )
+  assert(
+    other_topline_after == other_topline_before,
+    ("the current window must not scroll, topline %d became %d"):format(other_topline_before, other_topline_after)
+  )
+
+  numb._unpeek(peeked_win, false)
+  close_other_windows()
+end
+
+-------------------------------------------------------------------------------
+-- CONFIG VALIDATION TESTS
+-------------------------------------------------------------------------------
+
+local function capture_notifications(fn)
+  local original_notify = vim.notify
+  local messages = {}
+  vim.notify = function(msg, level)
+    table.insert(messages, { msg = tostring(msg), level = level })
+  end
+  local ok, err = pcall(fn)
+  vim.notify = original_notify
+  if not ok then
+    error(err)
+  end
+  return messages
+end
+
+function Tests.config_unknown_option_warns_and_is_dropped()
+  local numb = configure()
+  local messages = capture_notifications(function()
+    numb.setup { show_nubmers = true }
+  end)
+  assert(#messages == 1, ("unknown option must produce exactly one notification, got %d"):format(#messages))
+  assert(
+    messages[1].msg:find("show_nubmers", 1, true) ~= nil,
+    ("message must name the offending key, got %q"):format(messages[1].msg)
+  )
+  assert(messages[1].level == vim.log.levels.WARN, "unknown option is a warning, not an error")
+  assert(numb._state.opts.show_nubmers == nil, "unknown option must not be stored in opts")
+end
+
+function Tests.config_wrong_type_warns_and_keeps_default()
+  local numb = configure()
+  local messages = capture_notifications(function()
+    numb.setup { centered_peeking = "yes" }
+  end)
+  assert(#messages == 1, ("wrong type must produce exactly one notification, got %d"):format(#messages))
+  assert(
+    messages[1].msg:find("centered_peeking", 1, true) ~= nil,
+    ("message must name the offending key, got %q"):format(messages[1].msg)
+  )
+  assert(
+    numb._state.opts.centered_peeking == true,
+    ("rejected value must fall back to the default, got %s"):format(vim.inspect(numb._state.opts.centered_peeking))
+  )
+end
+
+function Tests.config_non_table_argument_warns_and_keeps_defaults()
+  local numb = configure()
+  for _, bad in ipairs { "oops", 42, true } do
+    local messages = capture_notifications(function()
+      numb.setup(bad)
+    end)
+    assert(#messages == 1, ("a %s argument must warn exactly once, got %d"):format(type(bad), #messages))
+    assert(messages[1].level == vim.log.levels.WARN, "a non-table argument is a warning, not an error")
+    assert(numb._state.opts.centered_peeking == true, ("defaults kept for %s argument"):format(type(bad)))
+    assert(numb._state.opts.show_numbers == true, ("defaults kept for %s argument"):format(type(bad)))
+  end
+end
+
+function Tests.config_typo_and_wrong_type_together_are_both_reported()
+  local numb = configure()
+  -- The exact shape originally reported: a misspelled key and a wrongly typed
+  -- value in one call.
+  local messages = capture_notifications(function()
+    numb.setup { show_nubmers = true, centered_peeking = "yes" }
+  end)
+  assert(#messages == 2, ("both problems must be reported, got %d"):format(#messages))
+  -- Joined rather than indexed: pairs() ordering over the user table is not
+  -- deterministic, so neither message has a guaranteed position.
+  local joined = table.concat({ messages[1].msg, messages[2].msg }, "\n")
+  assert(joined:find("show_nubmers", 1, true) ~= nil, ("typo key must be reported, got %q"):format(joined))
+  assert(joined:find("centered_peeking", 1, true) ~= nil, ("wrong type must be reported, got %q"):format(joined))
+  assert(numb._state.opts.show_nubmers == nil, "typo key must be dropped")
+  assert(numb._state.opts.centered_peeking == true, "wrongly typed value falls back to the default")
+end
+
+function Tests.config_valid_options_are_applied_without_warning()
+  local numb = configure()
+  local messages = capture_notifications(function()
+    numb.setup { show_numbers = false, number_only = true, centered_peeking = false }
+  end)
+  assert(#messages == 0, ("valid config must not warn, got %s"):format(vim.inspect(messages)))
+  assert(numb._state.opts.show_numbers == false, "show_numbers applied")
+  assert(numb._state.opts.number_only == true, "number_only applied")
+  assert(numb._state.opts.centered_peeking == false, "centered_peeking applied")
+end
+
 local M = {}
+
+-- The suite is launched with `+qall`, which blocks on E37 while any buffer is
+-- still modified. A hanging job is far worse than a failing one, so no test is
+-- allowed to leave a dirty buffer behind regardless of how it exited.
+local function clear_modified_buffers()
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].modified then
+      vim.bo[bufnr].modified = false
+    end
+  end
+end
 
 -- Run tests in sorted order for deterministic execution
 function M.run()
@@ -662,16 +1012,39 @@ function M.run()
   end
   table.sort(names)
 
+  -- Collect every failure instead of stopping at the first one, so a single run
+  -- reports the full picture. Still errors at the end so CI sees a non-zero exit.
+  local failures = {}
   for _, name in ipairs(names) do
     local fn = Tests[name]
     local ok, err = pcall(fn)
     if ok then
       vim.api.nvim_echo({ { ("[numb test] %s passed"):format(name), "None" } }, false, {})
     else
-      error(("[numb test] %s FAILED: %s"):format(name, err))
+      table.insert(failures, ("[numb test] %s FAILED: %s"):format(name, err))
+      vim.api.nvim_echo({ { failures[#failures], "ErrorMsg" } }, false, {})
     end
   end
-  print "All numb tests passed"
+
+  clear_modified_buffers()
+
+  if #failures > 0 then
+    local report = ("%d of %d numb tests failed:\n%s"):format(#failures, #names, table.concat(failures, "\n"))
+    if #vim.api.nvim_list_uis() == 0 then
+      -- Headless, so this is CI or scripts/check.sh. Raising here is not enough:
+      -- nvim reports the error, then the `+qall` that follows on the command
+      -- line exits 0 anyway, so a failing suite would report success. `cquit`
+      -- is the only way to hand a non-zero status back to the shell.
+      -- `nvim_err_writeln` is soft-deprecated but kept deliberately: its
+      -- replacement, `nvim_echo(..., { err = true })`, is 0.11+, and plain
+      -- `nvim_echo` writes to stdout, which would mix the failure report into
+      -- the pass log. Revisit only when the supported floor moves past 0.10.
+      vim.api.nvim_err_writeln(report)
+      vim.cmd "cquit 1"
+    end
+    error(report)
+  end
+  print(("All numb tests passed (%d)"):format(#names))
 end
 
 return M
