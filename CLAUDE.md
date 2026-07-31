@@ -10,8 +10,12 @@ reads the same content. Edit this file; never replace the symlink with a copy.
 # Run all checks (formatting + smoke test + tests) - use before PRs
 ./scripts/check.sh
 
-# Format Lua files (append --check to fail on drift instead of rewriting)
-stylua lua/numb
+# Format Lua files (append --check to fail on drift instead of rewriting).
+# Same scope as scripts/check.sh, so tests and plugin/ are covered too.
+stylua lua plugin tests
+
+# Lint (same scope; selene.toml plus the vendored vim.yml standard library)
+selene lua plugin tests
 
 # Verify plugin loads
 nvim --headless +"lua require('numb').setup()" +qall
@@ -61,9 +65,21 @@ Tests in `tests/run.lua` use `feedkeys()` to simulate command-line input and ver
 - Sequential jumps don't leak state
 - Relative jumps (`:+5`, `:-3`, `:++`, `:--`)
 - Complex expressions (`:+2+3`, `:-2-3`, `:10+5`)
-- Configuration options (`number_only`)
+- Configuration options (`number_only`, `centered_peeking`) and rejection of invalid ones
+- Commands that shrink the buffer under a confirmed peek (`:38,40d`)
+- `disable()` while a peek is active, including a peek in a background window
 
 Extend `tests/run.lua` whenever you fix a bug or add a new option. CI (`.github/workflows/ci.yml`) runs `scripts/check.sh` on every push and PR to `master`.
+
+`M.run()` reports every failure rather than stopping at the first, and when
+headless it exits through `cquit` so the shell sees a non-zero status. Do not
+replace that with a bare `error()`: the launcher appends `+qall`, which exits 0
+after an error is reported and would make the whole suite non-blocking in CI.
+
+Write tests that cannot pass for the wrong reason. Several existing tests assert
+their own preconditions first (that a window was actually scrolled, that a
+deferred callback actually ran) precisely because the interesting assertion would
+otherwise hold vacuously.
 
 For exploratory work, still verify inside Neovim using `:lua require('numb').setup{centered_peeking=false}` and `:{number}` jumps, and document any manual scenarios you covered in the PR description.
 
@@ -77,6 +93,8 @@ When adding tests, ensure coverage for:
 - [ ] Out-of-bounds clamping (high and low)
 - [ ] Window option restoration after confirm/abort
 - [ ] Sequential jumps without state pollution
+- [ ] Buffer-shrinking confirmed commands (the jump is applied after the command runs)
+- [ ] Behavior in a window that is not the current one
 
 ### Edge Cases
 

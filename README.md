@@ -168,6 +168,11 @@ require('numb').setup{
 After running `setup`, you are good to go. You can try with entering a number to
 the vim command line like `:3`.
 
+Unrecognised option names and values of the wrong type are reported through
+`vim.notify` and ignored, so a misspelled option does not silently do nothing.
+Invalid configuration never raises an error; the affected option simply keeps
+its default and the rest of your config is applied as usual.
+
 When you disable numb, your options are kept in the module level. So after you
 disable it, calling `enable()` (or `setup()` again) restores the plugin with
 your customized options. You can override the options at any time by calling

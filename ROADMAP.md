@@ -85,6 +85,15 @@ deferred, or dropped after discussion.
   permanently on and the peek visual is indistinguishable.
 - **Mark/search range peek.** Extend range peek to `'a,'b` and `/pat/`
   patterns. Deferred until MVP range peek lands.
+- **Move the test exit code out of the test module.** `tests/run.lua`
+  currently calls `cquit` itself when headless, because the launcher
+  appends `+qall`, which exits 0 even after an error and would otherwise
+  make the suite non-blocking in CI. The cleaner split is for `M.run()` to
+  return the failure count and let the caller decide, for example
+  `+"lua if not require('tests.run').run() then vim.cmd 'cquit 1' end"`.
+  That change has to land together with the invocations in
+  `scripts/check.sh` and `CLAUDE.md`, so it was kept out of the fix that
+  discovered the problem.
 
 ---
 
