@@ -1,0 +1,95 @@
+name: Bug report
+description: Report incorrect or unexpected peek behavior.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report. Please fill in every required
+        field; a report without a reproduction is very hard to act on.
+
+  - type: input
+    id: nvim-version
+    attributes:
+      label: Neovim version
+      description: >
+        First line of `nvim --version`. Neovim 0.10 is the minimum supported
+        version; reports against older releases will be closed.
+      placeholder: NVIM v0.11.2
+    validations:
+      required: true
+
+  - type: input
+    id: numb-version
+    attributes:
+      label: numb.nvim version
+      description: Tag, or commit SHA if you track `master`.
+      placeholder: v1.1.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: minimal-config
+    attributes:
+      label: Minimal reproduction config
+      description: >
+        A `minimal_init.lua` that loads only numb.nvim and reproduces the bug,
+        runnable with `nvim --clean -u minimal_init.lua`. Strip your personal
+        config down until the smallest thing that still fails remains.
+      render: lua
+      placeholder: |
+        vim.opt.runtimepath:prepend "/path/to/numb.nvim"
+        require("numb").setup()
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered, step by step, starting from launching Neovim.
+      placeholder: |
+        1. `nvim --clean -u minimal_init.lua some_file.txt`
+        2. Move the cursor to line 5.
+        3. Type `:+5` without pressing Enter.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected numb.nvim to do.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened, including any error messages verbatim.
+    validations:
+      required: true
+
+  - type: textarea
+    id: recording
+    attributes:
+      label: Terminal recording or screenshot
+      description: >
+        Optional but very helpful. Most bugs here are visual, so a short
+        recording (asciinema, GIF, or video) usually explains more than prose.
+        Drag files into this box to attach them.
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: >
+        Other plugins that interact with the cmdline, terminal emulator,
+        relevant options, or things you already ruled out.
+    validations:
+      required: false

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or usage help
+    url: https://github.com/nacro90/numb.nvim/discussions
+    about: Ask how to configure or use numb.nvim here rather than opening an issue.
+  - name: Idea or general discussion
+    url: https://github.com/nacro90/numb.nvim/discussions
+    about: Float a rough idea before it is concrete enough for a feature request.
