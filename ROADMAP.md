@@ -6,16 +6,16 @@ being considered or actively worked on next.
 
 Items are grouped by priority (P1 highest). Status icons:
 
-- 📋 Planned — designed, ready to start
-- 🚧 In Progress — being worked on
-- 🧪 Under Review — implementation complete, awaiting review
-- ✅ Shipped — moved to `CHANGELOG.md`
+- 📋 Planned: designed, ready to start
+- 🚧 In Progress: being worked on
+- 🧪 Under Review: implementation complete, awaiting review
+- ✅ Shipped: moved to `CHANGELOG.md`
 
 ---
 
-## Next: Toward v1.1.0
+## Next: Toward v1.2.0
 
-### P1 — Range peek 📋
+### P1: Range peek 🚧
 
 Highlight the line range when typing `:N,M{cmd}` so the user can verify
 the range before pressing Enter. Vim natively previews substitute via
@@ -29,12 +29,21 @@ single-line `:N` jumps, and this extends the same principle to ranges.
 - New option `range_peek = true` (default on).
 - Falls back to single-line peek if the cmdline does not match a range.
 - Unsupported syntaxes (`'a`, `/pat/`, `$`, `%`) pass through to native
-  Vim unhighlighted — no regression.
+  Vim unhighlighted, so there is no regression.
 
 **Why P1:** Addresses a real UX gap with no native Neovim equivalent.
 Natural extension of the plugin's "peek before commit" philosophy.
 
-### P3 — Filetype/buftype disable filter 📋
+### P2: `:checkhealth numb` 🚧
+
+Health check reporting the running Neovim version, augroup state, and
+config validity, so a bug report can start from `:checkhealth numb`
+output instead of a guess. Aligns with neovim-lua-plugin best practices.
+
+**Why P2:** Cheap to write, and it makes every future issue easier to
+triage.
+
+### P3: Filetype/buftype disable filter 🚧
 
 Two new options:
 
@@ -52,6 +61,15 @@ meaningful there.
 **Why P3:** Removes a real but narrow pain point (terminal flicker).
 Tiny change, opt-in for filetypes, conservative default for buftypes.
 
+### P4: Vimdoc `:h numb` 🚧
+
+Generate `doc/numb.txt` from the LuaCATS annotations via vimCATS or
+panvimdoc, so the options and the Lua API are readable without leaving
+Neovim.
+
+**Why P4:** Expected of a mature plugin, but it documents behavior the
+other items in this release are still changing, so it lands last.
+
 ---
 
 ## Future / Under Consideration
@@ -59,18 +77,13 @@ Tiny change, opt-in for filetypes, conservative default for buftypes.
 Items below are not committed to any release. They may be promoted,
 deferred, or dropped after discussion.
 
-- **`peek_delay` debounce** — Reduce flicker when typing multi-digit
+- **`peek_delay` debounce.** Reduce flicker when typing multi-digit
   numbers quickly. Likely small benefit on modern Neovim where redraws
   are already cheap.
-- **Custom highlight group `NumbPeek`** — Decouple peek styling from
+- **Custom highlight group `NumbPeek`.** Decouple peek styling from
   the global `cursorline` option. Useful when a user has `cursorline`
   permanently on and the peek visual is indistinguishable.
-- **`:checkhealth numb`** — Health check reporting Neovim version,
-  augroup state, and config validity. Aligns with neovim-lua-plugin
-  best practices.
-- **Vimdoc `:h numb`** — Generate `doc/numb.txt` via vimCATS or panvimdoc
-  from LuaCATS annotations.
-- **Mark/search range peek** — Extend range peek to `'a,'b` and `/pat/`
+- **Mark/search range peek.** Extend range peek to `'a,'b` and `/pat/`
   patterns. Deferred until MVP range peek lands.
 
 ---
@@ -79,7 +92,7 @@ deferred, or dropped after discussion.
 
 See [CHANGELOG.md](CHANGELOG.md) for shipped features.
 
-### v1.1.0 — 2026-05-25
+### v1.1.0 (2026-05-25)
 
 - Window-local `vim.w.numb_peeking` flag + `numb.is_peeking(winnr?)`
   Lua API for statusline integrations.
@@ -89,6 +102,6 @@ See [CHANGELOG.md](CHANGELOG.md) for shipped features.
 - Unused logging module removed.
 - CONTRIBUTING.md, ROADMAP.md, and release workflow documented.
 
-### v1.0.0 — 2026-05-25
+### v1.0.0 (2026-05-25)
 
 First tagged stable release. See `CHANGELOG.md` for the full list.

@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file is the single canonical set of repository guidelines for coding agents.
+`AGENTS.md` is a symlink to this file, so any agent that looks for either name
+reads the same content. Edit this file; never replace the symlink with a copy.
 
 ## Development Commands
 
@@ -8,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Run all checks (formatting + smoke test + tests) - use before PRs
 ./scripts/check.sh
 
-# Format Lua files
+# Format Lua files (append --check to fail on drift instead of rewriting)
 stylua lua/numb
 
 # Verify plugin loads
@@ -24,7 +26,7 @@ nvim --headless -u tests/init.lua -i NONE -n +"lua require('tests.run').run()" +
 
 ## Project Structure
 
-Code lives under `lua/numb/`; `init.lua` exposes the user-facing API. The Stylua config (`stylua.toml`) sits at the repo root. Headless regression tests live in `tests/` (`tests/init.lua` wires Neovim, `tests/run.lua` defines scenarios).
+Code lives under `lua/numb/`; `init.lua` exposes the user-facing API. The Stylua config (`stylua.toml`) sits at the repo root so the formatter can be run from anywhere. Headless regression tests live in `tests/` (`tests/init.lua` wires Neovim, `tests/run.lua` defines scenarios). Demo media is hosted externally, and the runtime expectations users rely on are captured in `README.md`.
 
 ## Architecture
 
@@ -61,7 +63,9 @@ Tests in `tests/run.lua` use `feedkeys()` to simulate command-line input and ver
 - Complex expressions (`:+2+3`, `:-2-3`, `:10+5`)
 - Configuration options (`number_only`)
 
-Extend `tests/run.lua` whenever you fix a bug or add a new option. CI runs `scripts/check.sh` on every push and PR to `master`.
+Extend `tests/run.lua` whenever you fix a bug or add a new option. CI (`.github/workflows/ci.yml`) runs `scripts/check.sh` on every push and PR to `master`.
+
+For exploratory work, still verify inside Neovim using `:lua require('numb').setup{centered_peeking=false}` and `:{number}` jumps, and document any manual scenarios you covered in the PR description.
 
 ### Test Coverage Checklist
 
@@ -88,19 +92,23 @@ When adding tests, ensure coverage for:
 - 2-space indentation, 120 column limit (see `stylua.toml`)
 - No call parentheses for simple calls: `require "numb"` not `require("numb")`
 - Prefer descriptive local names (`peek_line`, `cursor_state`) over single letters
-- Modules addressed as `require('numb.<submodule>')`; filenames lowercase with underscores
+- Modules addressed as `require('numb.<submodule>')`; filenames lowercase, with underscores only when mirroring Neovim option names
+- Return tables that expose only the documented API; keep helpers local
 
 ## Commit & PR Guidelines
 
-- Short, imperative commit summaries: `Add lazy.nvim instruction`, `Fix peek flicker (#42)`
+- Short, imperative commit summaries: `Add lazy.nvim instruction`, `Fix peek flicker (#42)`. Use a blank line and a body when the summary needs context
+- Squash unrelated changes and mention relevant issue numbers
 - PRs must describe motivation, user-facing changes, and testing steps
 - Attach screenshots/recordings when altering visuals
+- Tag reviewers when the change touches user configuration or command behavior, and keep the PR checklist current so maintainers can merge without back-and-forth
 
 ## Design Principles
 
-- Keep dependencies minimal—no runtime requirements outside stock Neovim/Lua
+- Keep dependencies minimal: no runtime requirements outside stock Neovim/Lua
 - Prefer feature flags via `require('numb').setup{...}` over global state
 - Document new options in `README.md`
+- When a design question is unresolved, open a draft PR with the question rather than guessing
 
 ## Release Workflow
 
@@ -117,7 +125,7 @@ Every user-facing change updates the `[Unreleased]` section of `CHANGELOG.md` in
    - New feature → minor bump (`1.0.0` → `1.1.0`)
    - Bug-fix only → patch bump (`1.0.0` → `1.0.1`)
    - Breaking public API change → major bump (`1.0.0` → `2.0.0`)
-3. Create an **annotated** tag (never lightweight — they miss author/date and break `git describe`):
+3. Create an **annotated** tag. Never use a lightweight tag: it carries no author or date and breaks `git describe`.
    ```bash
    git tag -a vX.Y.Z -m "Release vX.Y.Z"
    ```
@@ -128,7 +136,7 @@ Every user-facing change updates the `[Unreleased]` section of `CHANGELOG.md` in
    ```
 5. Create the GitHub Release (visible to plugin managers and Watch→Releases subscribers):
    ```bash
-   gh release create vX.Y.Z --title "vX.Y.Z — <short slug>" --notes "<changelog entry for this version>"
+   gh release create vX.Y.Z --title "vX.Y.Z: <short slug>" --notes "<changelog entry for this version>"
    ```
 
 ### Forbidden
@@ -145,5 +153,5 @@ Rebase, do not merge:
 git fetch origin
 git rebase origin/master
 ```
-Verify the subsequent push is a fast-forward — `git push` output should show `A..B` (double-dot), not `+A B` (which indicates a forced update).
+Verify the subsequent push is a fast-forward: `git push` output should show `A..B` (double-dot), not `+A B` (which indicates a forced update).
 

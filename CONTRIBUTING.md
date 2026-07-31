@@ -12,7 +12,7 @@ Keep discussions focused on the code and the user-facing behavior.
 
 Requirements:
 
-- **Neovim** 0.7 or newer
+- **Neovim** 0.10 or newer
 - **Stylua** for formatting ([install instructions](https://github.com/JohnnyMorganz/StyLua))
 - A POSIX shell to run `scripts/check.sh`
 
@@ -76,17 +76,17 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Add a bullet to the appropriate section under `[Unreleased]` in
 `CHANGELOG.md` as part of the same commit or PR. Section order:
 
-- **Added** — new features.
-- **Changed** — changes in existing behavior.
-- **Deprecated** — soon-to-be-removed features.
-- **Removed** — features removed in this release.
-- **Fixed** — bug fixes.
-- **Security** — vulnerability fixes.
+- **Added**: new features.
+- **Changed**: changes in existing behavior.
+- **Deprecated**: soon-to-be-removed features.
+- **Removed**: features removed in this release.
+- **Fixed**: bug fixes.
+- **Security**: vulnerability fixes.
 
 ## Testing
 
 Headless regression tests live in `tests/run.lua`. Add a test whenever you
-fix a bug or add an option — if a regression cannot be observed in CI, it
+fix a bug or add an option. If a regression cannot be observed in CI, it
 will eventually come back.
 
 Run tests directly:
@@ -113,7 +113,7 @@ Run `stylua lua/numb` before committing. CI rejects unformatted code.
 
 ## Design Principles
 
-- Keep dependencies minimal — no runtime requirements outside stock
+- Keep dependencies minimal: no runtime requirements outside stock
   Neovim and Lua.
 - Prefer feature flags via `require('numb').setup{...}` over global state.
 - Document every new option in `README.md`.
