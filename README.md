@@ -1,37 +1,35 @@
 # numb.nvim
 
+[![CI](https://github.com/nacro90/numb.nvim/actions/workflows/ci.yml/badge.svg)](https://github.com/nacro90/numb.nvim/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 numb.nvim is a Neovim plugin that peeks lines of the buffer in non-obtrusive
 way.
 
 ## Features
 
-Peeking the buffer while entering command `:{number}`
+- **Peek while typing `:{number}`.** Absolute (`:15`), relative (`:+5`, `:-3`),
+  and chained (`:++`) targets are previewed in place; the cursor only really
+  moves once you confirm with Enter.
+- **`:Numb` user command.** Turn peeking on or off at runtime with
+  `:Numb enable`, `:Numb disable`, or `:Numb toggle`, all tab-completed. See
+  [Usage](#usage).
+- **`vim.w.numb_peeking` statusline flag.** A window-local boolean you can read
+  from any statusline plugin while a peek is active. See
+  [Statusline Integration](#statusline-integration).
 
 ![demo](https://gist.githubusercontent.com/nacro90/d9fa04d88d3f757b9ba899fd38866405/raw/f5991c839a95ed92fcc3943f9b7853a0c620d018/demo.gif)
 
 The colorscheme is [vim-substrata](https://github.com/arzg/vim-substrata)
 
+## Requirements
+
+Neovim 0.10 or newer. No other runtime dependencies; numb.nvim uses nothing
+outside stock Neovim and Lua.
+
 ## Installation
 
-### Packer
-
-```lua
-use 'nacro90/numb.nvim'
-```
-
-### Paq
-
-```lua
-paq 'nacro90/numb.nvim'
-```
-
-### Plug
-
-```viml
-Plug 'nacro90/numb.nvim'
-```
-
-### Lazy.nvim
+### lazy.nvim
 
 ```lua
 {
@@ -45,6 +43,50 @@ Plug 'nacro90/numb.nvim'
     -- customizable config here, see Options below
   }
 }
+```
+
+### vim.pack
+
+Neovim 0.12 ships a built-in plugin manager. `vim.pack.add` takes a list of
+specs, where each spec is either a plain URL string or a table with a `src`
+key:
+
+```lua
+vim.pack.add {
+  'https://github.com/nacro90/numb.nvim',
+}
+
+require('numb').setup()
+```
+
+To pin a version, use the table form and add a `version` field. It accepts a
+branch, tag, or commit hash, or a range built with `vim.version.range()`:
+
+```lua
+vim.pack.add {
+  { src = 'https://github.com/nacro90/numb.nvim', version = 'v1.1.0' },
+}
+```
+
+### Paq
+
+```lua
+paq 'nacro90/numb.nvim'
+```
+
+### vim-plug
+
+```viml
+Plug 'nacro90/numb.nvim'
+```
+
+### Packer
+
+Packer is no longer maintained; the repository is archived. Use it only if your
+config already depends on it, and prefer lazy.nvim or `vim.pack` for new setups.
+
+```lua
+use 'nacro90/numb.nvim'
 ```
 
 ## Usage
