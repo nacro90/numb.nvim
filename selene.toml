@@ -1,0 +1,10 @@
+# selene configuration for numb.nvim.
+#
+# `std` names a standard library; "vim" resolves to the vendored `vim.yml` in
+# this directory, which itself is based on lua51 (Neovim embeds LuaJIT).
+std = "vim"
+
+[lints]
+# Neovim plugins legitimately mix positional and keyed entries in the tables
+# they hand to the API (autocmd and user-command specs, for example).
+mixed_table = "allow"

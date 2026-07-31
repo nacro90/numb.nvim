@@ -1,0 +1,26 @@
+---
+# Selene standard library for Neovim's Lua runtime.
+#
+# Selene ships std libs for plain Lua only, so the Neovim surface is
+# community-maintained and vendored per project. This file is referenced by
+# `std = "vim"` in selene.toml; selene resolves that name to `vim.yml` in the
+# working directory.
+#
+# Neovim embeds LuaJIT, which is Lua 5.1 plus a few extensions, so the base is
+# lua51 and the LuaJIT-only globals are declared explicitly below.
+base: lua51
+
+globals:
+  # The whole editor API hangs off the `vim` table: vim.api.*, vim.fn.*,
+  # vim.o, vim.w, vim.schedule, vim.notify, vim.tbl_* and so on. It is declared
+  # open-ended rather than enumerated; keeping a hand-written list of every
+  # nvim_* function in sync with each Neovim release is not maintainable, and a
+  # stale list produces false "undefined" errors instead of catching bugs.
+  vim:
+    any: true
+
+  # LuaJIT extras that the plain lua51 std lib does not declare.
+  jit:
+    any: true
+  bit:
+    any: true
