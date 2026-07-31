@@ -5,8 +5,7 @@ expectations, and tooling for changes to numb.nvim.
 
 ## Code of Conduct
 
-Be respectful in issues, pull requests, and reviews. Assume good intent.
-Keep discussions focused on the code and the user-facing behavior.
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md).
 
 ## Getting Started
 

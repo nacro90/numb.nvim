@@ -1,0 +1,52 @@
+name: Feature request
+description: Suggest a new option or behavior for numb.nvim.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        numb.nvim aims to stay small and unobtrusive. Describing the use case
+        before any code is written keeps the plugin's footprint small and avoids
+        wasted work; see `CONTRIBUTING.md`.
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: >
+        What are you trying to do, and where does numb.nvim get in the way
+        today? Describe the problem, not the implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: >
+        The user-facing behavior you would like. If it needs a new `setup{}`
+        option, name it and give its default.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: >
+        Existing options, other plugins, or a plain mapping you tried first and
+        why they did not fit.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and discussions for this idea.
+          required: true
+        - label: This keeps numb.nvim dependency-free (stock Neovim and Lua only).
+          required: true
