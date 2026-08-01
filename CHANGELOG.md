@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The Ex line symbols `$` (last line) and `.` (current line) are now previewed,
+  including arithmetic on either of them: `:$`, `:$-3`, `:.`, `:.+5`. Previously
+  only digits and signs were recognised, so `:$` produced no preview at all.
+
 ### Changed
 - `setup()` now reports invalid configuration instead of accepting it silently.
   An unknown option name is ignored with a warning, and a value of the wrong

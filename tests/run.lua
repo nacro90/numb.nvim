@@ -991,6 +991,105 @@ function Tests.config_valid_options_are_applied_without_warning()
   assert(numb._state.opts.centered_peeking == false, "centered_peeking applied")
 end
 
+-------------------------------------------------------------------------------
+-- ADDRESS SYNTAX TESTS
+-------------------------------------------------------------------------------
+
+-- Observe the peek produced by a real command line. This is the only way to
+-- exercise the address parsing path, because `_peek` takes a resolved line
+-- number and so bypasses parsing entirely. The observer is registered after
+-- numb's own CmdlineChanged handler, so it runs second and sees the result.
+-- The command line is aborted with <C-c>, not <Esc>: inside a macro, and
+-- feedkeys counts as one, <Esc> executes the command rather than cancelling it
+-- (see :h c_<Esc>). So nothing here is ever executed.
+local function probe_cmdline(cmdline)
+  local numb = require "numb"
+  local observed
+  local group = vim.api.nvim_create_augroup("numb_test_probe", { clear = true })
+  vim.api.nvim_create_autocmd("CmdlineChanged", {
+    group = group,
+    pattern = ":",
+    callback = function()
+      observed = {
+        cmdline = vim.fn.getcmdline(),
+        peeking = numb.is_peeking(),
+        line = vim.api.nvim_win_get_cursor(0)[1],
+      }
+    end,
+  })
+  feedkeys(cmdline .. "<C-c>")
+  wait_until_idle()
+  vim.api.nvim_del_augroup_by_id(group)
+  assert(observed ~= nil, ("the probe never observed a CmdlineChanged for %q"):format(cmdline))
+  assert(
+    observed.cmdline == cmdline:sub(2),
+    ("the probe observed %q, expected %q"):format(observed.cmdline, cmdline:sub(2))
+  )
+  return observed
+end
+
+function Tests.address_dollar_previews_the_last_line()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":$"
+  assert(observed.peeking, "':$' must produce a peek")
+  assert(observed.line == 40, ("':$' must preview the last line, got %d"):format(observed.line))
+  assert_cursor(1, "aborting ':$' restores the original cursor")
+end
+
+function Tests.address_dollar_with_offset_previews_relative_to_the_end()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":$-3"
+  assert(observed.peeking, "':$-3' must produce a peek")
+  assert(observed.line == 37, ("':$-3' must preview line 37, got %d"):format(observed.line))
+end
+
+function Tests.address_dot_previews_the_current_line()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 12, 0 })
+  local observed = probe_cmdline ":."
+  assert(observed.peeking, "':.' must produce a peek")
+  assert(observed.line == 12, ("':.' must preview the current line, got %d"):format(observed.line))
+end
+
+function Tests.address_dot_with_offset_previews_a_relative_line()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 10, 0 })
+  local observed = probe_cmdline ":.+5"
+  assert(observed.peeking, "':.+5' must produce a peek")
+  assert(observed.line == 15, ("':.+5' must preview line 15, got %d"):format(observed.line))
+end
+
+function Tests.address_dollar_is_clamped_to_the_buffer()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":$+10"
+  assert(observed.line == 40, ("beyond the last line must clamp to 40, got %d"):format(observed.line))
+end
+
+function Tests.address_dollar_confirmed_jumps_to_the_last_line()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  run_cmd ":$\r"
+  assert_cursor(40, "confirming ':$' lands on the last line")
+end
+
+function Tests.address_non_address_command_does_not_preview()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 5, 0 })
+  local observed = probe_cmdline ":help numb"
+  assert(not observed.peeking, "a command that is not an address must not peek")
+  assert_cursor(5, "cursor untouched by a non-address command")
+end
+
 local M = {}
 
 -- The suite is launched with `+qall`, which blocks on E37 while any buffer is

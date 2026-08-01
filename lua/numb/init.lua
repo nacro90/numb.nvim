@@ -279,13 +279,26 @@ local function is_peeking(winnr)
 end
 
 ---Parse an Ex command number expression with arithmetic support
----@param str string The expression string (e.g., "+5", "10-3", "++")
+---@param str string The expression string (e.g., "+5", "10-3", "++", "$-3", ".+5")
 ---@param base_line integer|nil Base line for relative expressions
+---@param last_line integer|nil Line count of the buffer, the value of `$`
 ---@return integer|nil Parsed line number or nil if invalid
-local function parse_num_str(str, base_line)
+local function parse_num_str(str, base_line, last_line)
   -- Validate input contains only expected characters
-  if not str:match "^[%+%-%d]+$" then
+  if not str:match "^[%+%-%d%.%$]+$" then
     return nil
+  end
+
+  -- Resolve the two Ex line symbols to numbers up front, so the arithmetic below
+  -- only ever sees digits and signs. `.` is the current line and `$` the last
+  -- one, matching Ex addressing.
+  base_line = base_line or api.nvim_win_get_cursor(0)[1]
+  str = str:gsub("%.", tostring(base_line))
+  if str:find "%$" then
+    if not last_line then
+      return nil
+    end
+    str = str:gsub("%$", tostring(last_line))
   end
 
   -- Transform consecutive operators into expressions (e.g., "++" -> "+1+")
@@ -297,10 +310,11 @@ local function parse_num_str(str, base_line)
     str = str .. 1
   end
 
-  -- Determine base for relative expressions
+  -- Determine base for relative expressions. A leading `.` or `$` has already
+  -- become a number above, so only a leading sign still needs the base added.
   local base = 0
   if str:find "^[%+%-]" then
-    base = base_line or api.nvim_win_get_cursor(0)[1]
+    base = base_line
   end
 
   -- Safe arithmetic parsing
@@ -335,14 +349,15 @@ end
 function numb.on_cmdline_changed()
   local cmd_line = fn.getcmdline()
   local winnr = api.nvim_get_current_win()
-  local pattern = "^([%+%-%d]+)" .. (state.opts.number_only and "$" or "")
+  local pattern = "^([%+%-%d%.%$]+)" .. (state.opts.number_only and "$" or "")
   local num_str = cmd_line:match(pattern)
 
   if num_str then
     -- Use original cursor position if already peeking
     local win_state = state.win_states[winnr]
     local base_line = win_state and win_state.cursor[1] or api.nvim_win_get_cursor(winnr)[1]
-    local target_line = parse_num_str(num_str, base_line)
+    local last_line = api.nvim_buf_line_count(api.nvim_win_get_buf(winnr))
+    local target_line = parse_num_str(num_str, base_line, last_line)
     if target_line then
       unpeek(winnr, false)
       peek(winnr, target_line)
