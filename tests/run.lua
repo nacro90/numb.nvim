@@ -1031,6 +1031,28 @@ end
 -- ADDRESS SYNTAX TESTS
 -------------------------------------------------------------------------------
 
+-- The 1-indexed line range currently highlighted by the plugin, or nil when
+-- nothing is. Found by namespace name rather than through a test-only hook, so
+-- the test observes what any other plugin would see.
+local function highlighted_range(bufnr)
+  local ns = vim.api.nvim_get_namespaces()["numb_range"]
+  if not ns then
+    return nil
+  end
+  local marks = vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { details = true })
+  if #marks == 0 then
+    return nil
+  end
+  local first, last
+  for _, mark in ipairs(marks) do
+    local row, details = mark[2], mark[4]
+    local stop = details and details.end_row or row
+    first = first and math.min(first, row) or row
+    last = last and math.max(last, stop) or stop
+  end
+  return { first + 1, last + 1 }
+end
+
 -- Observe the peek produced by a real command line. This is the only way to
 -- exercise the address parsing path, because `_peek` takes a resolved line
 -- number and so bypasses parsing entirely. The observer is registered after
@@ -1050,6 +1072,7 @@ local function probe_cmdline(cmdline)
         cmdline = vim.fn.getcmdline(),
         peeking = numb.is_peeking(),
         line = vim.api.nvim_win_get_cursor(0)[1],
+        range = highlighted_range(0),
       }
     end,
   })
@@ -1245,6 +1268,126 @@ function Tests.health_does_not_depend_on_internal_state_for_the_config()
     health_matches(records, "info", "number_only = true") ~= nil,
     "the config report must come from the public getter, not from numb._state"
   )
+end
+
+-------------------------------------------------------------------------------
+-- RANGE PEEK TESTS
+-------------------------------------------------------------------------------
+
+local function assert_range(observed, expected_first, expected_last, label)
+  assert(observed.range ~= nil, ("%s: expected a highlighted range, got none"):format(label))
+  assert(
+    observed.range[1] == expected_first and observed.range[2] == expected_last,
+    ("%s: expected range %d..%d, got %d..%d"):format(
+      label,
+      expected_first,
+      expected_last,
+      observed.range[1],
+      observed.range[2]
+    )
+  )
+end
+
+function Tests.range_peek_highlights_the_whole_range()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":5,10d"
+  assert_range(observed, 5, 10, "':5,10d'")
+  -- Vim leaves the cursor at the start of the range after such a command, so
+  -- previewing the start line is what matches where you will actually end up.
+  assert(observed.line == 5, ("the start line must be previewed, got %d"):format(observed.line))
+end
+
+function Tests.range_peek_swaps_reversed_bounds()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":10,5d"
+  assert_range(observed, 5, 10, "':10,5d'")
+end
+
+function Tests.range_peek_resolves_relative_endpoints()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 20, 0 })
+  local observed = probe_cmdline ":.,+5y"
+  assert_range(observed, 20, 25, "':.,+5y'")
+end
+
+function Tests.range_peek_resolves_the_last_line_symbol()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":30,$d"
+  assert_range(observed, 30, 40, "':30,$d'")
+end
+
+function Tests.range_peek_clamps_to_the_buffer()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":30,999d"
+  assert_range(observed, 30, 40, "':30,999d'")
+end
+
+function Tests.range_peek_clears_the_highlight_on_abort()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":5,10d"
+  assert_range(observed, 5, 10, "while typing")
+  assert(highlighted_range(0) == nil, "the highlight must be gone once the command line is abandoned")
+end
+
+function Tests.range_peek_clears_the_highlight_on_confirm()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  run_cmd ":5,10y\r"
+  vim.wait(200, function()
+    return false
+  end, 10, false)
+  assert(highlighted_range(0) == nil, "the highlight must be gone once the command has run")
+end
+
+function Tests.range_peek_shrinks_as_the_range_is_retyped()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  -- ":5,1" then ":5,12": the highlight must track the latest range, not accumulate.
+  local observed = probe_cmdline ":5,12d"
+  assert_range(observed, 5, 12, "':5,12d' after passing through ':5,1'")
+end
+
+function Tests.range_peek_unsupported_syntax_falls_through()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 20, 0 })
+  local observed = probe_cmdline ":'a,'bd"
+  assert(observed.range == nil, "a mark range must be left to native Vim, unhighlighted")
+  assert(not observed.peeking, "a mark range must not peek either")
+end
+
+function Tests.range_peek_disabled_keeps_the_single_line_peek()
+  configure { range_peek = false }
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":5,10d"
+  assert(observed.range == nil, "range_peek = false must not highlight")
+  assert(observed.peeking, "the single line peek must still happen")
+  assert(observed.line == 5, ("the start line is still previewed, got %d"):format(observed.line))
+end
+
+function Tests.range_peek_highlight_group_is_overridable()
+  configure()
+  -- `default = true` on the plugin's definition means a user's own NumbRange
+  -- survives setup(), which is what lets people theme it.
+  vim.api.nvim_set_hl(0, "NumbRange", { bg = "#123456" })
+  require("numb").setup { centered_peeking = false }
+  local hl = vim.api.nvim_get_hl(0, { name = "NumbRange" })
+  assert(hl.bg == tonumber("123456", 16), "a user defined NumbRange must not be overwritten by setup()")
+  vim.api.nvim_set_hl(0, "NumbRange", {})
 end
 
 local M = {}

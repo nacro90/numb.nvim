@@ -11,6 +11,9 @@ way.
 - **Peek while typing `:{number}`.** Absolute (`:15`), relative (`:+5`, `:-3`),
   and chained (`:++`) targets are previewed in place; the cursor only really
   moves once you confirm with Enter.
+- **Range preview.** Typing `:50,80d` highlights lines 50 through 80 before you
+  press Enter. Neovim previews `:substitute` via `inccommand` but nothing else,
+  so `:d`, `:y`, `:m`, `:t` and `:g` had no preview at all.
 - **Ex line symbols.** `:$` previews the last line and `:.` the current one,
   including arithmetic on either (`:$-3`, `:.+5`). Targets past the start or end
   of the buffer are clamped rather than rejected.
@@ -169,7 +172,15 @@ require('numb').setup{
   hide_relativenumbers = true, -- Enable turning off 'relativenumber' for the window while peeking
   number_only = false, -- Peek only when the command is only a number instead of when it starts with a number
   centered_peeking = true, -- Peeked line will be centered relative to window
+  range_peek = true, -- Highlight the whole line range while typing `:N,M{cmd}`
 }
+```
+
+The range highlight uses the `NumbRange` group, linked to `Visual` by default.
+Override it whenever you like, before or after `setup()`:
+
+```lua
+vim.api.nvim_set_hl(0, 'NumbRange', { bg = '#3a3a50' })
 ```
 
 After running `setup`, you are good to go. You can try with entering a number to

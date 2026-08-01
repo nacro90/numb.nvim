@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Range preview. Typing `:N,M{cmd}` now highlights the whole line range, so a
+  destructive command such as `:50,80d` can be checked before it runs. Neovim
+  previews `:substitute` through `inccommand` but nothing else, so `:d`, `:y`,
+  `:m`, `:t` and `:g` previously had no preview at all. The lower bound is also
+  peeked, since that is where Vim leaves the cursor afterwards. Reversed bounds
+  are accepted, endpoints may use `.`, `$` and arithmetic (`:.,+5`, `:30,$`),
+  and mark or search ranges are left to Vim untouched. Controlled by the new
+  `range_peek` option, on by default; the highlight group is `NumbRange`, linked
+  to `Visual` unless you define your own.
 - Vimdoc help file, so `:h numb` works from inside Neovim. Every option and
   public function has its own tag (`:h numb-options`, `:h numb.setup()`), and CI
   derives the required tags from the Lua sources, so adding an option without

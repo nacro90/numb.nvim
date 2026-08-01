@@ -20,6 +20,7 @@ local cmd = vim.cmd
 ---@field hide_relativenumbers boolean Disable 'relativenumber' for the window while peeking
 ---@field number_only boolean Peek only when command is purely numeric
 ---@field centered_peeking boolean Center peeked line in window
+---@field range_peek boolean Highlight the whole line range for `:N,M{cmd}`
 
 ---@class NumbState
 ---@field win_states table<integer, NumbWinState> Per-window saved state
@@ -39,6 +40,7 @@ local DEFAULT_OPTS = {
   hide_relativenumbers = true,
   number_only = false,
   centered_peeking = true,
+  range_peek = true,
 }
 
 ---Drop unknown and wrongly typed options, warning once per offending key.
@@ -109,6 +111,20 @@ local state = State.new()
 ---@type string[]
 local TRACKED_WIN_OPTIONS = { "number", "cursorline", "foldenable", "relativenumber" }
 
+---Namespace owning the range highlight, so it can be cleared wholesale without
+---touching extmarks belonging to anything else.
+local RANGE_NS = api.nvim_create_namespace "numb_range"
+
+---Pattern fragment matching a single Ex address this plugin can resolve.
+local ADDRESS = "[%+%-%d%.%$]+"
+
+---Define the range highlight. `default = true` so a user or colorscheme
+---definition of `NumbRange` wins; linking to `Visual` means the preview looks
+---like a selection, which is what a pending range operation effectively is.
+local function define_highlight()
+  api.nvim_set_hl(0, "NumbRange", { link = "Visual", default = true })
+end
+
 -------------------------------------------------------------------------------
 -- Internal Functions
 --
@@ -151,6 +167,38 @@ local function set_win_options(winnr, options)
       api.nvim_set_option_value(option, value, { win = winnr, scope = "local" })
     end
   end
+end
+
+---Remove the range highlight from the window's buffer.
+---@param winnr integer Window handle
+local function clear_range(winnr)
+  if not api.nvim_win_is_valid(winnr) then
+    return
+  end
+  api.nvim_buf_clear_namespace(api.nvim_win_get_buf(winnr), RANGE_NS, 0, -1)
+end
+
+---Highlight an inclusive line range in the window's buffer.
+---One extmark spans the whole range rather than one per line, so the cost does
+---not grow with the size of the range; `:1,10000d` is as cheap as `:1,2d`.
+---@param winnr integer Window handle
+---@param first integer One end of the range
+---@param last integer The other end; the two are ordered here, so `:10,5` works
+local function highlight_range(winnr, first, last)
+  local bufnr = api.nvim_win_get_buf(winnr)
+  local low = clamp_linenr(bufnr, math.min(first, last))
+  local high = clamp_linenr(bufnr, math.max(first, last))
+  local last_text = api.nvim_buf_get_lines(bufnr, high - 1, high, false)[1] or ""
+
+  api.nvim_buf_clear_namespace(bufnr, RANGE_NS, 0, -1)
+  api.nvim_buf_set_extmark(bufnr, RANGE_NS, low - 1, 0, {
+    end_row = high - 1,
+    end_col = #last_text,
+    hl_group = "NumbRange",
+    -- Without this the last line stops at its final character, which reads as a
+    -- ragged edge rather than a block of selected lines.
+    hl_eol = true,
+  })
 end
 
 ---Peek at a line in the window
@@ -214,6 +262,8 @@ local function unpeek(winnr, stay)
     state.peek_cursor = nil
     return
   end
+
+  clear_range(winnr)
 
   -- Restore original window options
   set_win_options(winnr, orig_state.options)
@@ -349,14 +399,36 @@ end
 function numb.on_cmdline_changed()
   local cmd_line = fn.getcmdline()
   local winnr = api.nvim_get_current_win()
-  local pattern = "^([%+%-%d%.%$]+)" .. (state.opts.number_only and "$" or "")
-  local num_str = cmd_line:match(pattern)
+  local anchor = state.opts.number_only and "$" or ""
+
+  -- Use original cursor position if already peeking
+  local win_state = state.win_states[winnr]
+  local base_line = win_state and win_state.cursor[1] or api.nvim_win_get_cursor(winnr)[1]
+  local last_line = api.nvim_buf_line_count(api.nvim_win_get_buf(winnr))
+
+  -- Ranges are tried first. The single address branch below would otherwise
+  -- match only the first address of `:5,10d` and preview line 5 alone, which
+  -- looks like a confirmation of the range while showing none of it.
+  if state.opts.range_peek then
+    local first_str, last_str = cmd_line:match("^(" .. ADDRESS .. "),(" .. ADDRESS .. ")" .. anchor)
+    if first_str then
+      local first = parse_num_str(first_str, base_line, last_line)
+      local last = parse_num_str(last_str, base_line, last_line)
+      if first and last then
+        unpeek(winnr, false)
+        -- Vim leaves the cursor at the start of the range after such a command,
+        -- so previewing the lower bound shows where you will actually land.
+        peek(winnr, math.min(first, last))
+        highlight_range(winnr, first, last)
+        cmd "redraw"
+        return
+      end
+    end
+  end
+
+  local num_str = cmd_line:match("^(" .. ADDRESS .. ")" .. anchor)
 
   if num_str then
-    -- Use original cursor position if already peeking
-    local win_state = state.win_states[winnr]
-    local base_line = win_state and win_state.cursor[1] or api.nvim_win_get_cursor(winnr)[1]
-    local last_line = api.nvim_buf_line_count(api.nvim_win_get_buf(winnr))
     local target_line = parse_num_str(num_str, base_line, last_line)
     if target_line then
       unpeek(winnr, false)
@@ -400,6 +472,10 @@ local function install_autocmds()
     pattern = ":",
     callback = numb.on_cmdline_exit,
   })
+  api.nvim_create_autocmd("ColorScheme", {
+    group = augroup_id,
+    callback = define_highlight,
+  })
   api.nvim_create_autocmd("WinClosed", {
     group = augroup_id,
     callback = function(event)
@@ -408,6 +484,10 @@ local function install_autocmds()
       -- state would sit in `win_states` for the rest of the session.
       local winnr = tonumber(event.match)
       if winnr then
+        -- WinClosed fires while the window still exists, so its buffer is still
+        -- reachable and a range highlight left on it can still be cleared. The
+        -- buffer may well be displayed in another window.
+        clear_range(winnr)
         state.win_states[winnr] = nil
       end
     end,
@@ -517,6 +597,7 @@ end
 ---@param user_opts NumbConfig|any Configuration options
 function numb.setup(user_opts)
   state:configure(user_opts)
+  define_highlight()
   install_autocmds()
   install_user_command()
 end
