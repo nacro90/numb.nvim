@@ -214,6 +214,11 @@ numb.disable()
 
                                                            *numb.is_enabled()*
 numb.is_enabled()
+                Reflects only what numb.nvim itself did. If something else
+                clears the `numb` augroup, an `augroup numb | autocmd!` block
+                in a user config for instance, peeking stops working while
+                this still returns `true`. |numb-health| detects that case.
+
                 Return: ~
                     (`boolean`) `true` while the autocommands are installed.
 

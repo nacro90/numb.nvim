@@ -465,6 +465,11 @@ local function install_user_command()
 end
 
 ---Returns true when the plugin's autocommands are installed.
+---Reflects only what this plugin did: if something else clears the `numb`
+---augroup, for example an `augroup numb | autocmd!` block in a user config, the
+---autocommands are gone but this still returns true. `:checkhealth numb` cross
+---checks the augroup and reports that case; keeping the check out of here leaves
+---this a cheap state read rather than a diagnostic.
 ---@return boolean
 function numb.is_enabled()
   return augroup_id ~= nil
