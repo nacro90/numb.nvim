@@ -997,6 +997,25 @@ function Tests.config_typo_and_wrong_type_together_are_both_reported()
   assert(numb._state.opts.centered_peeking == true, "wrongly typed value falls back to the default")
 end
 
+function Tests.get_config_returns_the_active_options()
+  local numb = configure { number_only = true }
+  local config = numb.get_config()
+  assert(type(config) == "table", "get_config() must return a table")
+  assert(config.number_only == true, "get_config() must report the active value")
+  assert(config.show_numbers == true, "get_config() must include defaults that were not overridden")
+  for key in pairs(numb._state.opts) do
+    assert(config[key] ~= nil, ("get_config() must include %s"):format(key))
+  end
+end
+
+function Tests.get_config_returns_a_copy_not_the_live_table()
+  local numb = configure()
+  local config = numb.get_config()
+  config.show_numbers = "tampered"
+  assert(numb._state.opts.show_numbers == true, "mutating the returned table must not reconfigure the plugin")
+  assert(numb.get_config().show_numbers == true, "a later call must not see the tampering either")
+end
+
 function Tests.config_valid_options_are_applied_without_warning()
   local numb = configure()
   local messages = capture_notifications(function()
@@ -1215,15 +1234,16 @@ function Tests.health_errors_when_the_augroup_was_cleared()
   )
 end
 
-function Tests.health_survives_unreadable_internal_state()
-  local numb = configure()
+function Tests.health_does_not_depend_on_internal_state_for_the_config()
+  local numb = configure { number_only = true }
   local original_state = numb._state
   numb._state = nil
   local records = capture_health()
   numb._state = original_state
+  -- capture_health re-raises, so getting here at all proves it did not throw.
   assert(
-    health_matches(records, "warn", "unreadable") ~= nil,
-    "health must degrade to a warning rather than throwing when internal state changes shape"
+    health_matches(records, "info", "number_only = true") ~= nil,
+    "the config report must come from the public getter, not from numb._state"
   )
 end
 

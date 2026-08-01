@@ -151,14 +151,15 @@ end
 ---Values are not validated here: `setup()` already rejects unknown keys and
 ---wrong types, and defaults are merged in, so every key is present and sane by
 ---construction. Iterating the table keeps new options visible without edits.
----@param state table|nil `numb._state`, when readable
-local function check_config(state)
-  if type(state) ~= "table" or type(state.opts) ~= "table" then
-    vim.health.warn "Active configuration is unreadable; `numb._state.opts` is missing"
+---@param numb table The loaded `numb` module
+local function check_config(numb)
+  if type(numb.get_config) ~= "function" then
+    vim.health.warn "Active configuration is unreadable; this numb.nvim predates `get_config()`"
     return
   end
 
-  local keys = vim.tbl_keys(state.opts)
+  local opts = numb.get_config()
+  local keys = vim.tbl_keys(opts)
   if #keys == 0 then
     vim.health.warn "Active configuration is empty; expected the merged defaults"
     return
@@ -168,7 +169,7 @@ local function check_config(state)
     return tostring(a) < tostring(b)
   end)
   for _, key in ipairs(keys) do
-    vim.health.info(("%s = %s"):format(tostring(key), format_value(state.opts[key])))
+    vim.health.info(("%s = %s"):format(tostring(key), format_value(opts[key])))
   end
 end
 
@@ -196,7 +197,7 @@ function health.check()
   check_peek_state(numb, numb._state)
 
   vim.health.start "numb.nvim: configuration"
-  check_config(numb._state)
+  check_config(numb)
 end
 
 return health

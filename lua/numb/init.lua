@@ -464,6 +464,14 @@ local function install_user_command()
   })
 end
 
+---Returns the configuration currently in effect, defaults included.
+---A copy, so mutating the result cannot reconfigure the plugin behind its back;
+---`setup()` and `enable()` stay the only way to change options.
+---@return NumbConfig
+function numb.get_config()
+  return vim.deepcopy(state.opts)
+end
+
 ---Returns true when the plugin's autocommands are installed.
 ---Reflects only what this plugin did: if something else clears the `numb`
 ---augroup, for example an `augroup numb | autocmd!` block in a user config, the

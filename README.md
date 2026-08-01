@@ -131,6 +131,7 @@ require('numb').disable()
 require('numb').enable()
 require('numb').is_enabled()           -- returns boolean
 require('numb').is_peeking(winnr?)     -- returns boolean (current window if omitted)
+require('numb').get_config()           -- returns a copy of the active options
 ```
 
 `enable()` preserves the options previously passed to `setup{...}`, so you do
