@@ -14,6 +14,9 @@ way.
 - **Ex line symbols.** `:$` previews the last line and `:.` the current one,
   including arithmetic on either (`:$-3`, `:.+5`). Targets past the start or end
   of the buffer are clamped rather than rejected.
+- **Documentation and diagnostics in the editor.** `:h numb` for the full
+  reference, `:checkhealth numb` to report the version, install location, setup
+  state and active configuration when something looks wrong.
 - **`:Numb` user command.** Turn peeking on or off at runtime with
   `:Numb enable`, `:Numb disable`, or `:Numb toggle`, all tab-completed. See
   [Usage](#usage).
