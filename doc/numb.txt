@@ -1,0 +1,313 @@
+*numb.txt*   Peek lines of the buffer while typing :{number}
+
+==============================================================================
+CONTENTS                                                       *numb-contents*
+
+  1. Introduction ............................................. |numb-intro|
+  2. Requirements ....................................... |numb-requirements|
+  3. Installation ....................................... |numb-installation|
+  4. Usage .................................................... |numb-usage|
+  5. Command ................................................ |numb-command|
+  6. Options ................................................ |numb-options|
+  7. Lua API .................................................... |numb-api|
+  8. Statusline integration ............................... |numb-statusline|
+  9. Health check ........................................... |numb-health|
+ 10. Turning peeking off .................................. |numb-disabling|
+ 11. License ................................................ |numb-license|
+
+==============================================================================
+1. Introduction                                *numb* *numb.nvim* *numb-intro*
+
+numb.nvim peeks lines of the buffer in a non-obtrusive way. While you type an
+Ex command that starts with a line number, such as `:15`, that line is
+previewed in place: the view scrolls to it, 'number' and 'cursorline' are
+turned on for the window, and folds are opened so the line is visible.
+
+Nothing is committed until you confirm the command with <CR>. Aborting the
+command line with <Esc> or <C-c> restores the window as it was, including the
+original cursor position and the scroll position.
+
+Absolute (`:15`), relative (`:+5`, `:-3`) and chained (`:++`, `:--`) targets
+are all previewed, as are arithmetic combinations such as `:+2+3` and `:10-2`.
+The Ex line symbols work as well: `:.` is the current line and `:$` the last
+one, with arithmetic on either, as in `:.+5` and `:$-3`. See |:range| for the
+addressing this follows.
+
+A target past either end of the buffer is clamped to the first or the last
+line. A command line that does not start with a line address, such as
+`:write`, never triggers a peek.
+
+Peeking is per window. Two splits showing the same buffer never affect each
+other, and a peek in a window that is not the current one is restored
+independently.
+
+==============================================================================
+2. Requirements                                            *numb-requirements*
+
+Neovim 0.10 or newer. There are no other runtime dependencies; numb.nvim uses
+nothing outside stock Neovim and Lua.
+
+==============================================================================
+3. Installation                                            *numb-installation*
+
+numb.nvim calls |numb.setup()| itself from `plugin/numb.lua`, so the defaults
+below are active as soon as the plugin is on your 'runtimepath'. Call
+|numb.setup()| explicitly only when you want to change |numb-options|. To keep
+the plugin from loading at all, see |g:loaded_numb|.
+
+With lazy.nvim: >lua
+    {
+      'nacro90/numb.nvim',
+    }
+
+    -- or optionally pass `opts` to customize the config
+    {
+      'nacro90/numb.nvim',
+      opts = {
+        -- see |numb-options|
+      },
+    }
+<
+With `vim.pack` (built into Neovim 0.12): >lua
+    vim.pack.add {
+      'https://github.com/nacro90/numb.nvim',
+    }
+<
+With Paq: >lua
+    paq 'nacro90/numb.nvim'
+<
+With vim-plug: >vim
+    Plug 'nacro90/numb.nvim'
+<
+With Packer (unmaintained; prefer lazy.nvim or `vim.pack`): >lua
+    use 'nacro90/numb.nvim'
+<
+
+==============================================================================
+4. Usage                                                          *numb-usage*
+
+Nothing is needed to get the default behaviour. Type a line number on the Ex
+command line and watch the buffer follow along: >
+    :3
+<
+To change any of the |numb-options|, call |numb.setup()| from your
+`init.lua`: >lua
+    require('numb').setup {
+      centered_peeking = false,
+    }
+<
+From an `init.vim`, load it the same way through `:lua`: >vim
+    :lua require('numb').setup()
+<
+Peeking can be turned on and off at runtime with the |:Numb| command or the
+functions in |numb-api|.
+
+==============================================================================
+5. Command                                                      *numb-command*
+
+                                                                       *:Numb*
+:Numb [{action}]
+                Control peeking at runtime. {action} is one of `enable`,
+                `disable` or `toggle`, and defaults to `toggle` when omitted.
+                Actions are completed with <Tab>.
+
+                `enable` reinstalls the autocommands using the configuration
+                that is already in effect, so options passed to a previous
+                |numb.setup()| are preserved. An unknown {action} is reported
+                through |vim.notify()| and nothing else happens.
+
+==============================================================================
+6. Options                                                      *numb-options*
+
+Options are passed as a table to |numb.setup()| or |numb.enable()|. Every
+option is a boolean. Any subset may be given; the rest keep their defaults.
+
+Unknown option names, and values of the wrong type, are reported through
+|vim.notify()| and ignored. Invalid configuration never raises: the offending
+option keeps its default and the rest of the table is applied as usual, so a
+typo cannot leave the plugin uninstalled.
+
+Defaults: >lua
+    require('numb').setup {
+      show_numbers = true,
+      show_cursorline = true,
+      hide_relativenumbers = true,
+      number_only = false,
+      centered_peeking = true,
+    }
+<
+------------------------------------------------------------------------------
+show_numbers                                               *numb-show_numbers*
+                Type: `boolean`, default: `true`
+
+                Set 'number' in the peeked window while peeking, so the line
+                numbers are visible even in a window that normally hides
+                them. The previous value is restored afterwards.
+
+------------------------------------------------------------------------------
+show_cursorline                                         *numb-show_cursorline*
+                Type: `boolean`, default: `true`
+
+                Set 'cursorline' in the peeked window while peeking, which
+                highlights the previewed line. The previous value is restored
+                afterwards.
+
+------------------------------------------------------------------------------
+hide_relativenumbers                               *numb-hide_relativenumbers*
+                Type: `boolean`, default: `true`
+
+                Turn 'relativenumber' off while peeking. With
+                'relativenumber' on, the numbers shift as the previewed
+                cursor moves, which makes the peeked line hard to identify.
+                The previous value is restored afterwards.
+
+------------------------------------------------------------------------------
+number_only                                                 *numb-number_only*
+                Type: `boolean`, default: `false`
+
+                Peek only when the whole command line is a number expression,
+                instead of whenever it starts with one. With this on, `:15`
+                still peeks but `:15,20d` does not.
+
+------------------------------------------------------------------------------
+centered_peeking                                       *numb-centered_peeking*
+                Type: `boolean`, default: `true`
+
+                Center the peeked line in the window, as |zz| does. This also
+                applies to the confirmed jump, so the line you land on stays
+                where you saw it.
+
+==============================================================================
+7. Lua API                                                          *numb-api*
+
+                                                                *numb.setup()*
+numb.setup({opts})
+                Apply {opts} (see |numb-options|) and install the
+                autocommands and the |:Numb| command. Safe to call repeatedly;
+                each call replaces the previous configuration and reinstalls
+                the autocommands.
+
+                `plugin/numb.lua` already calls this with no arguments, so
+                calling it yourself is only needed to pass {opts}.
+
+                Parameters: ~
+                  • {opts} (`table?`) Options, see |numb-options|.
+
+                                                               *numb.enable()*
+numb.enable({opts})
+                Install the autocommands again after |numb.disable()|. The
+                configuration in effect is kept, so {opts} is optional; pass
+                it to override options at the same time. Does nothing when
+                peeking is already enabled.
+
+                Parameters: ~
+                  • {opts} (`table?`) Options, see |numb-options|.
+
+                                                              *numb.disable()*
+numb.disable()
+                Remove the autocommands and drop all saved state. Any window
+                that is peeking right now is restored first. Peeking stays off
+                until |numb.enable()| or |numb.setup()| is called again.
+
+                Note that the |:Numb| command remains defined, so peeking can
+                always be turned back on with `:Numb enable`.
+
+                                                           *numb.is_enabled()*
+numb.is_enabled()
+                Return: ~
+                    (`boolean`) `true` while the autocommands are installed.
+
+                                                           *numb.is_peeking()*
+numb.is_peeking({winnr})
+                Whether a peek is in progress in a window. Reads the same
+                state as |w:numb_peeking|, so the two never disagree. An
+                invalid window handle yields `false` rather than an error.
+
+                Parameters: ~
+                  • {winnr} (`integer?`) Window handle. `nil` or `0` means the
+                    current window.
+
+                Return: ~
+                    (`boolean`) `true` while that window is peeking.
+
+------------------------------------------------------------------------------
+The two functions below are the autocommand callbacks numb.nvim installs on
+|CmdlineChanged| and |CmdlineLeave|. They are part of the module only so the
+autocommands can reach them; there is no reason to call them yourself.
+
+                                                   *numb.on_cmdline_changed()*
+numb.on_cmdline_changed()
+                Parse the current command line and start, move or end the
+                peek accordingly.
+
+                                                      *numb.on_cmdline_exit()*
+numb.on_cmdline_exit()
+                End the peek, keeping the new position when the command was
+                confirmed and restoring the window when it was aborted.
+
+==============================================================================
+8. Statusline integration                                    *numb-statusline*
+
+                                                              *w:numb_peeking*
+w:numb_peeking  Set to `true` in a window while that window is peeking, and
+                back to `nil` as soon as the peek ends, whether it was
+                confirmed or aborted. The scope is the window, not the buffer,
+                so two splits showing the same buffer never cross-flag each
+                other. Read it from Lua as `vim.w.numb_peeking`.
+
+A minimal lualine component reading the flag: >lua
+    require('lualine').setup {
+      sections = {
+        lualine_x = {
+          function() return vim.w.numb_peeking and 'peek' or '' end,
+        },
+      },
+    }
+<
+From Lua, |numb.is_peeking()| answers the same question for any window.
+
+==============================================================================
+9. Health check                                                  *numb-health*
+
+`:checkhealth numb` reports whether numb.nvim is installed and set up the way
+you think it is. It covers:
+
+  - the running Neovim version against the supported floor;
+  - where numb.nvim was loaded from, and whether more than one copy sits on
+    the 'runtimepath', which is the usual reason a configuration change seems
+    to do nothing;
+  - whether |numb.setup()| has run, and whether peeking is enabled or was
+    turned off with `:Numb disable`;
+  - whether the `numb` augroup still owns its |CmdlineChanged| and
+    |CmdlineLeave| autocommands, which another `augroup numb` in your config
+    can clear;
+  - which windows are peeking at the moment, and any saved state left behind
+    by a window that was closed mid-peek;
+  - the active configuration, so that a pasted health report is
+    self-contained.
+
+See |health| for `:checkhealth` itself.
+
+==============================================================================
+10. Turning peeking off                                       *numb-disabling*
+
+At runtime, use `:Numb disable` (see |:Numb|) or |numb.disable()|. The options
+you configured are kept, so `:Numb enable` resumes with them.
+
+                                                               *g:loaded_numb*
+g:loaded_numb   Set this before startup to keep numb.nvim from loading at
+                all: >lua
+    vim.g.loaded_numb = 1
+<
+                `plugin/numb.lua` returns early when the variable is set, so
+                no autocommands and no |:Numb| command are created. The
+                variable is set to `1` by the plugin itself once it has
+                loaded, which also makes loading idempotent.
+
+==============================================================================
+11. License                                                     *numb-license*
+
+MIT. See the `LICENSE` file in the repository:
+https://github.com/nacro90/numb.nvim
+
+vim:tw=78:ts=8:noet:ft=help:norl:
