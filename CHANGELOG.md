@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `:checkhealth numb`. Reports the Neovim version against the supported floor,
+  where the plugin was loaded from and whether a second copy is shadowing it,
+  whether it is set up, and the active configuration so a pasted health report
+  is self-contained. Being disabled on purpose is reported as a warning, not an
+  error.
 - The Ex line symbols `$` (last line) and `.` (current line) are now previewed,
   including arithmetic on either of them: `:$`, `:$-3`, `:.`, `:.+5`. Previously
   only digits and signs were recognised, so `:$` produced no preview at all.

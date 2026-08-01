@@ -1090,6 +1090,126 @@ function Tests.address_non_address_command_does_not_preview()
   assert_cursor(5, "cursor untouched by a non-address command")
 end
 
+-------------------------------------------------------------------------------
+-- HEALTH CHECK TESTS
+-------------------------------------------------------------------------------
+
+-- Stub `vim.health` and run the check, so the report can be asserted on rather
+-- than eyeballed. Re-raises, so a health check that throws fails the test.
+local function capture_health()
+  local original = vim.health
+  local records = {}
+  local function record(level)
+    return function(msg, advice)
+      table.insert(records, { level = level, msg = tostring(msg), advice = advice })
+    end
+  end
+  vim.health = {
+    start = record "start",
+    info = record "info",
+    ok = record "ok",
+    warn = record "warn",
+    error = record "error",
+  }
+  local ok, err = pcall(require("numb.health").check)
+  vim.health = original
+  if not ok then
+    error(err)
+  end
+  return records
+end
+
+local function health_entries(records, level)
+  return vim.tbl_filter(function(entry)
+    return entry.level == level
+  end, records)
+end
+
+local function health_matches(records, level, pattern)
+  for _, entry in ipairs(health_entries(records, level)) do
+    if entry.msg:find(pattern) then
+      return entry
+    end
+  end
+  return nil
+end
+
+function Tests.health_check_runs_and_opens_a_section()
+  configure()
+  local records = capture_health()
+  assert(#records > 0, "the health check must report something")
+  assert(health_matches(records, "start", "numb%.nvim") ~= nil, "the report must open a numb.nvim section")
+end
+
+function Tests.health_reports_ok_when_enabled()
+  configure()
+  local records = capture_health()
+  assert(health_matches(records, "ok", "Enabled") ~= nil, "an enabled plugin must report ok")
+  assert(#health_entries(records, "error") == 0, "an enabled plugin must report no errors")
+end
+
+function Tests.health_warns_rather_than_errors_when_deliberately_disabled()
+  local numb = configure()
+  numb.disable()
+  local records = capture_health()
+  assert(health_matches(records, "warn", "Disabled via") ~= nil, "disabling on purpose must warn")
+  assert(
+    #health_entries(records, "error") == 0,
+    "a user who turned numb off on purpose must not be told something is broken"
+  )
+end
+
+function Tests.health_errors_when_setup_was_never_called()
+  local numb = configure()
+  numb.disable()
+  -- `:Numb` outliving disable() is exactly what separates "off on purpose" from
+  -- "never set up", so it has to go for this branch to be reachable at all.
+  pcall(vim.api.nvim_del_user_command, "Numb")
+  local records = capture_health()
+  assert(
+    health_matches(records, "error", "never been called") ~= nil,
+    "a plugin that was never set up must report an error"
+  )
+end
+
+function Tests.health_reports_every_configured_option()
+  local numb = configure { number_only = true }
+  local records = capture_health()
+  local infos = health_entries(records, "info")
+  for key in pairs(numb._state.opts) do
+    local reported = false
+    for _, entry in ipairs(infos) do
+      if entry.msg:find("^" .. key .. " = ") then
+        reported = true
+      end
+    end
+    assert(reported, ("the config report must include %s"):format(key))
+  end
+  assert(health_matches(records, "info", "number_only = true") ~= nil, "reported values must be the active ones")
+end
+
+function Tests.health_errors_when_the_augroup_was_cleared()
+  configure()
+  vim.api.nvim_del_augroup_by_name "numb"
+  local records = capture_health()
+  assert(
+    health_matches(records, "error", "augroup is gone") ~= nil,
+    "a cleared augroup must be reported even though is_enabled() still returns true"
+  )
+end
+
+function Tests.health_survives_unreadable_internal_state()
+  local numb = configure()
+  local original_state = numb._state
+  numb._state = nil
+  local records = capture_health()
+  numb._state = original_state
+  assert(
+    health_matches(records, "warn", "unreadable") ~= nil,
+    "health must degrade to a warning rather than throwing when internal state changes shape"
+  )
+end
+
 local M = {}
 
 -- The suite is launched with `+qall`, which blocks on E37 while any buffer is
