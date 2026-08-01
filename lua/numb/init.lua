@@ -400,6 +400,18 @@ local function install_autocmds()
     pattern = ":",
     callback = numb.on_cmdline_exit,
   })
+  api.nvim_create_autocmd("WinClosed", {
+    group = augroup_id,
+    callback = function(event)
+      -- A window closed mid-peek can never be restored, and `unpeek` only ever
+      -- runs for the current window on `CmdlineLeave`, so without this its saved
+      -- state would sit in `win_states` for the rest of the session.
+      local winnr = tonumber(event.match)
+      if winnr then
+        state.win_states[winnr] = nil
+      end
+    end,
+  })
 end
 
 ---@class NumbSubcommand

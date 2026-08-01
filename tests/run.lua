@@ -805,6 +805,23 @@ function Tests.disable_during_peek_in_background_window_restores_it()
   close_other_windows()
 end
 
+function Tests.closing_a_peeked_window_reclaims_its_saved_state()
+  local numb = configure()
+  reset_buffer()
+  local peeked_win = create_split()
+  numb._peek(peeked_win, 20)
+  assert(numb._state.win_states[peeked_win] ~= nil, "state must be saved while peeking")
+
+  vim.cmd "wincmd p"
+  vim.api.nvim_win_close(peeked_win, true)
+
+  -- Nothing else can reclaim it: unpeek is only ever driven by CmdlineLeave for
+  -- the current window, so without a WinClosed hook the entry would survive for
+  -- the rest of the session.
+  assert(numb._state.win_states[peeked_win] == nil, "closing a window mid-peek must reclaim its saved state")
+  close_other_windows()
+end
+
 function Tests.disable_after_peeked_window_closed_still_disables()
   local numb = configure()
   reset_buffer()

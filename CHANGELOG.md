@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Peeking in a background window no longer scrolls the window you are actually
   in. View restoration and centering now target the peeked window rather than
   the current one.
+- Closing a window while it is peeking no longer leaves its saved state behind
+  for the rest of the session.
 
 ## [1.1.0] - 2026-05-25
 
