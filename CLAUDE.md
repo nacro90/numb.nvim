@@ -7,15 +7,17 @@ reads the same content. Edit this file; never replace the symlink with a copy.
 ## Development Commands
 
 ```bash
-# Run all checks (formatting + smoke test + tests) - use before PRs
+# Run every gate - use before PRs. Stages: format, lint, docs, nvim.
+# Any subset can be run on its own, which is how CI splits the work.
 ./scripts/check.sh
+./scripts/check.sh docs nvim      # everything that needs no external tool
 
 # Format Lua files (append --check to fail on drift instead of rewriting).
-# Same scope as scripts/check.sh, so tests and plugin/ are covered too.
-stylua lua plugin tests
+# Same scope as scripts/check.sh, so tests, plugin/ and scripts/ are covered too.
+stylua lua plugin tests scripts
 
 # Lint (same scope; selene.toml plus the vendored vim.yml standard library)
-selene lua plugin tests
+selene lua plugin tests scripts
 
 # Verify plugin loads
 nvim --headless +"lua require('numb').setup()" +qall
