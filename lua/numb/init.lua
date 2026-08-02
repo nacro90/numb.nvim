@@ -151,8 +151,10 @@ local function clamp_linenr(bufnr, linenr)
   return math.max(1, math.min(max_line, linenr))
 end
 
----Save window state for later restoration
+---Save window state for later restoration.
 ---@param winnr integer Window handle
+---@return NumbWinState The state just saved, so the caller does not have to read
+---it back out of `win_states` across calls that can fire autocommands
 local function save_win_state(winnr)
   local win_options = {}
   for _, option in ipairs(TRACKED_WIN_OPTIONS) do
@@ -167,6 +169,7 @@ local function save_win_state(winnr)
     options = win_options,
     topline = api.nvim_win_call(winnr, fn.winsaveview).topline,
   }
+  return state.win_states[winnr]
 end
 
 ---Apply window options
@@ -221,10 +224,10 @@ local function peek(winnr, linenr)
   local bufnr = api.nvim_win_get_buf(winnr)
   linenr = clamp_linenr(bufnr, linenr)
 
-  -- Save window state on first peek
-  if not state.win_states[winnr] then
-    save_win_state(winnr)
-  end
+  -- Save window state on first peek. Held in a local because `set_win_options`
+  -- below fires `OptionSet`, so reading it back out of `win_states` afterwards
+  -- would be reading through state a user autocommand could have changed.
+  local win_state = state.win_states[winnr] or save_win_state(winnr)
 
   -- Apply peeking options
   local peeking_options = {
@@ -239,7 +242,7 @@ local function peek(winnr, linenr)
   set_win_options(winnr, peeking_options)
 
   -- Move cursor to target line, preserving column
-  local original_column = state.win_states[winnr].cursor[2]
+  local original_column = win_state.cursor[2]
   state.peek_cursor = { linenr, original_column }
   api.nvim_win_set_cursor(winnr, state.peek_cursor)
 
