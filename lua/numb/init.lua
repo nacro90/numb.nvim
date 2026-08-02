@@ -12,6 +12,8 @@ local address = require "numb.address"
 -------------------------------------------------------------------------------
 
 ---@class NumbWinState
+---@field bufnr integer Buffer the peek was started on, and so the buffer any
+---range highlight belongs to
 ---@field cursor integer[] Saved cursor position [line, col]
 ---@field options table<string, boolean> Saved window options
 ---@field topline integer Saved topline for view restoration
@@ -157,6 +159,10 @@ local function save_win_state(winnr)
     win_options[option] = api.nvim_get_option_value(option, { win = winnr, scope = "local" })
   end
   state.win_states[winnr] = {
+    -- The buffer is remembered rather than looked up later, because the range
+    -- highlight lives on this buffer and the window may be gone, or showing
+    -- something else, by the time it has to be cleared.
+    bufnr = api.nvim_win_get_buf(winnr),
     cursor = api.nvim_win_get_cursor(winnr),
     options = win_options,
     topline = api.nvim_win_call(winnr, fn.winsaveview).topline,
@@ -174,13 +180,15 @@ local function set_win_options(winnr, options)
   end
 end
 
----Remove the range highlight from the window's buffer.
----@param winnr integer Window handle
-local function clear_range(winnr)
-  if not api.nvim_win_is_valid(winnr) then
+---Remove the range highlight from a buffer.
+---Takes the buffer rather than the window, because the window a range was drawn
+---from can be closed while the buffer, and the extmark on it, live on.
+---@param bufnr integer Buffer handle
+local function clear_range(bufnr)
+  if not api.nvim_buf_is_valid(bufnr) then
     return
   end
-  api.nvim_buf_clear_namespace(api.nvim_win_get_buf(winnr), RANGE_NS, 0, -1)
+  api.nvim_buf_clear_namespace(bufnr, RANGE_NS, 0, -1)
 end
 
 ---Highlight an inclusive line range in the window's buffer.
@@ -260,15 +268,17 @@ local function unpeek(winnr, stay)
   end
 
   -- The window can be gone before restoration runs, for example a peeked split
-  -- that was closed, or `disable()` called afterwards. Every API call below
-  -- would raise on a stale handle, so drop the saved state and stop instead.
+  -- that was closed, or `disable()` called afterwards. Every window API call
+  -- below would raise on a stale handle, so drop the saved state and stop. The
+  -- range still has to go: it is on the buffer, which outlives the window.
   if not api.nvim_win_is_valid(winnr) then
+    clear_range(orig_state.bufnr)
     state.win_states[winnr] = nil
     state.peek_cursor = nil
     return
   end
 
-  clear_range(winnr)
+  clear_range(orig_state.bufnr)
 
   -- Restore original window options
   set_win_options(winnr, orig_state.options)
@@ -373,14 +383,22 @@ end
 
 ---Handle command line exit
 function numb.on_cmdline_exit()
-  local winnr = api.nvim_get_current_win()
-  if not has_saved_state(winnr) then
-    return
-  end
-  -- Stay at target if command was confirmed (not aborted)
+  -- Stay at the target when the command was confirmed. `CmdlineLeave` fires
+  -- before the command runs, so `abort == false` only means Enter was pressed;
+  -- the command itself may still fail.
   local event = api.nvim_get_vvar "event"
   local stay = not event.abort
-  unpeek(winnr, stay)
+
+  -- Every window with saved state is torn down, not just the current one. The
+  -- window that was peeking can already be gone: closing it during a command
+  -- line, which any plugin dismissing a float from a timer will do, gives no
+  -- `WinClosed` at all, and focus has moved on by now. Keying off the current
+  -- window would leave that peek's saved state and its range highlight behind
+  -- for the rest of the session. At most one window peeks at a time, so this
+  -- loop is one iteration in every ordinary case.
+  for _, winnr in ipairs(vim.tbl_keys(state.win_states)) do
+    unpeek(winnr, stay)
+  end
 end
 
 -- Augroup handle is non-nil while the plugin is active.
@@ -411,13 +429,15 @@ local function install_autocmds()
     callback = function(event)
       -- A window closed mid-peek can never be restored, and `unpeek` only ever
       -- runs for the current window on `CmdlineLeave`, so without this its saved
-      -- state would sit in `win_states` for the rest of the session.
+      -- state would sit in `win_states` for the rest of the session, and the
+      -- range it drew would stay on the buffer for the rest of the session too.
       local winnr = tonumber(event.match)
-      if winnr then
-        -- WinClosed fires while the window still exists, so its buffer is still
-        -- reachable and a range highlight left on it can still be cleared. The
-        -- buffer may well be displayed in another window.
-        clear_range(winnr)
+      local win_state = winnr and state.win_states[winnr]
+      if win_state then
+        -- Cleared through the remembered buffer, not the window: by the time
+        -- this runs during a command line the window can already be gone, and
+        -- looking the buffer up through it would silently do nothing.
+        clear_range(win_state.bufnr)
         state.win_states[winnr] = nil
       end
     end,

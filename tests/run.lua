@@ -821,6 +821,7 @@ function Tests.closing_a_peeked_window_reclaims_its_saved_state()
   close_other_windows()
 end
 
+
 function Tests.disable_after_peeked_window_closed_still_disables()
   local numb = configure()
   reset_buffer()
@@ -1506,6 +1507,45 @@ function Tests.range_peek_clamps_to_the_buffer()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   local observed = probe_cmdline ":30,999d"
   assert_range(observed, 30, 40, "':30,999d'")
+end
+
+function Tests.closing_the_peeking_window_clears_its_range_highlight()
+  local numb = configure()
+  reset_buffer()
+  local bufnr = vim.api.nvim_get_current_buf()
+  -- Two windows on one buffer, typing in the one that gets closed. The extmark
+  -- belongs to the buffer, so it outlives its window unless something clears it,
+  -- and closing a window while the command line is open really happens: any
+  -- plugin closing a float from a timer does it.
+  local doomed = create_split()
+  vim.api.nvim_win_set_cursor(doomed, { 1, 0 })
+
+  local observed = {}
+  local group = vim.api.nvim_create_augroup("numb_test_window_close", { clear = true })
+  vim.api.nvim_create_autocmd("CmdlineChanged", {
+    group = group,
+    pattern = ":",
+    callback = function()
+      -- Only once the whole range is typed. Firing on the first keystroke would
+      -- close the window before there is any highlight to leave behind, and the
+      -- test would pass without proving anything.
+      if vim.fn.getcmdline() ~= "5,10d" or observed.while_typing then
+        return
+      end
+      observed.while_typing = highlighted_range(bufnr)
+      vim.api.nvim_win_close(doomed, true)
+    end,
+  })
+
+  feedkeys ":5,10d<C-c>"
+  wait_until_idle()
+  vim.api.nvim_del_augroup_by_id(group)
+  drain_scheduled()
+  close_other_windows()
+
+  assert(observed.while_typing ~= nil, "the range must have been highlighted before the window was closed")
+  assert(highlighted_range(bufnr) == nil, "closing the peeking window must clear the range it highlighted")
+  assert(vim.tbl_count(numb._state.win_states) == 0, "and must not leave saved state behind")
 end
 
 function Tests.range_peek_clears_the_highlight_on_abort()
