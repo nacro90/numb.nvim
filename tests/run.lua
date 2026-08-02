@@ -1597,6 +1597,26 @@ function Tests.range_peek_disabled_keeps_the_single_line_peek()
   assert(observed.line == 5, ("the start line is still previewed, got %d"):format(observed.line))
 end
 
+function Tests.enable_without_setup_defines_the_range_highlight()
+  -- A child process is the only honest way to check this. Once setup() has run,
+  -- Neovim remembers NumbRange's default definition for the rest of the session
+  -- and even `highlight clear` restores it, so the "never defined" state this is
+  -- about cannot be recreated in process.
+  local child = table.concat({
+    "vim.opt.runtimepath:append(vim.fn.getcwd())",
+    -- enable() rather than setup(): that is the path a config takes when it sets
+    -- vim.g.loaded_numb to keep plugin/numb.lua from auto-configuring.
+    "require('numb').enable {}",
+    "io.stdout:write(vim.inspect(vim.api.nvim_get_hl(0, { name = 'NumbRange' })))",
+  }, "\n")
+  local output = vim.fn.system({ "nvim", "--headless", "--clean", "-l", "/dev/stdin" }, child)
+  assert(vim.v.shell_error == 0, ("the child Neovim failed: %s"):format(output))
+  assert(
+    output:find 'link = "Visual"',
+    ("enable() must define NumbRange, or the range preview is invisible; child reported %s"):format(output)
+  )
+end
+
 function Tests.range_peek_highlight_group_is_overridable()
   configure()
   -- `default = true` on the plugin's definition means a user's own NumbRange

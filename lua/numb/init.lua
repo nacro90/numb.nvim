@@ -413,6 +413,11 @@ local augroup_id = nil
 ---(re-`setup()` or `disable` → `enable`).
 local function install_autocmds()
   augroup_id = api.nvim_create_augroup("numb", { clear = true })
+  -- Defined here rather than only in `setup()`, so that peeking is never
+  -- installed without the group the range preview draws with. A config that sets
+  -- `g:loaded_numb` and then calls `enable()` skips `setup()` entirely, and used
+  -- to end up with a working peek and an invisible range.
+  define_highlight()
   api.nvim_create_autocmd("CmdlineChanged", {
     group = augroup_id,
     pattern = ":",
@@ -550,7 +555,6 @@ end
 ---@param user_opts NumbConfig|any Configuration options
 function numb.setup(user_opts)
   state:configure(user_opts)
-  define_highlight()
   install_autocmds()
   install_user_command()
 end
