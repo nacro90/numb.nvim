@@ -1681,8 +1681,15 @@ function Tests.enable_without_setup_defines_the_range_highlight()
     "require('numb').enable {}",
     "io.stdout:write(vim.inspect(vim.api.nvim_get_hl(0, { name = 'NumbRange' })))",
   }, "\n")
-  local output = vim.fn.system({ "nvim", "--headless", "--clean", "-l", "/dev/stdin" }, child)
-  assert(vim.v.shell_error == 0, ("the child Neovim failed: %s"):format(output))
+  -- Written to a file rather than piped in. `nvim -l /dev/stdin` works on some
+  -- machines and fails on others with "cannot open /dev/stdin", because whether
+  -- that path can be opened depends on how the pipe was set up.
+  local script = vim.fn.tempname()
+  vim.fn.writefile(vim.split(child, "\n"), script)
+  local output = vim.fn.system { "nvim", "--headless", "--clean", "-l", script }
+  local failed = vim.v.shell_error ~= 0
+  vim.fn.delete(script)
+  assert(not failed, ("the child Neovim failed: %s"):format(output))
   assert(
     output:find 'link = "Visual"',
     ("enable() must define NumbRange, or the range preview is invisible; child reported %s"):format(output)
