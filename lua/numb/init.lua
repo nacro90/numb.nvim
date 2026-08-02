@@ -133,6 +133,12 @@ end
 -- below therefore goes through `api.nvim_win_call(winnr, ...)`, so that the
 -- `winnr` these functions take is genuinely honored even when the target window
 -- is not the current one.
+--
+-- The confirmed-jump branch of `unpeek` is the one exception: it makes the
+-- target window current with `api.nvim_set_current_win` and switches back when
+-- it is done, so the bare `normal!` commands there already act on the right
+-- window. Read that switch as deliberate rather than as a missing
+-- `api.nvim_win_call`.
 -------------------------------------------------------------------------------
 
 ---Clamp line number to valid buffer range
