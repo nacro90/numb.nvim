@@ -59,6 +59,92 @@ local function configure(opts)
   return module
 end
 
+-- The 1-indexed line range currently highlighted by the plugin, or nil when
+-- nothing is. Found by namespace name rather than through a test-only hook, so
+-- the test observes what any other plugin would see.
+local function highlighted_range(bufnr)
+  local ns = vim.api.nvim_get_namespaces()["numb_range"]
+  if not ns then
+    return nil
+  end
+  local marks = vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { details = true })
+  if #marks == 0 then
+    return nil
+  end
+  local first, last
+  for _, mark in ipairs(marks) do
+    local row, details = mark[2], mark[4]
+    local stop = details and details.end_row or row
+    first = first and math.min(first, row) or row
+    last = last and math.max(last, stop) or stop
+  end
+  -- The count is reported alongside the span because merging hides the difference
+  -- between one extmark covering 5..10 and two stale ones that happen to span it,
+  -- and a range is meant to be exactly one extmark however long it is.
+  return { first + 1, last + 1, count = #marks }
+end
+
+-- Observe the peek produced by a real command line, then end it with
+-- `terminator`. This is the only way to exercise the address parsing path,
+-- because `_peek` takes a resolved line number and so bypasses parsing
+-- entirely. The observer is registered after numb's own CmdlineChanged handler,
+-- so it runs second and sees the result.
+local function observe_cmdline(cmdline, terminator)
+  local numb = require "numb"
+  local observed
+  local group = vim.api.nvim_create_augroup("numb_test_probe", { clear = true })
+  vim.api.nvim_create_autocmd("CmdlineChanged", {
+    group = group,
+    pattern = ":",
+    callback = function()
+      observed = {
+        cmdline = vim.fn.getcmdline(),
+        peeking = numb.is_peeking(),
+        line = vim.api.nvim_win_get_cursor(0)[1],
+        range = highlighted_range(0),
+      }
+    end,
+  })
+  feedkeys(cmdline .. terminator)
+  wait_until_idle()
+  vim.api.nvim_del_augroup_by_id(group)
+  assert(observed ~= nil, ("the probe never observed a CmdlineChanged for %q"):format(cmdline))
+  assert(
+    observed.cmdline == cmdline:sub(2),
+    ("the probe observed %q, expected %q"):format(observed.cmdline, cmdline:sub(2))
+  )
+  return observed
+end
+
+-- Abandon the command line with <C-c>, not <Esc>: inside a macro, and feedkeys
+-- counts as one, <Esc> executes the command rather than cancelling it (see
+-- :h c_<Esc>). So nothing typed through this helper is ever executed.
+local function probe_cmdline(cmdline)
+  return observe_cmdline(cmdline, "<C-c>")
+end
+
+-- The same observation, but the command is confirmed instead of abandoned. Vim
+-- resolves every address this plugin understands on its own, so asserting only
+-- where the cursor ends up after `:$` would hold with numb uninstalled. The
+-- observation is what proves the plugin previewed the target first.
+local function confirm_cmdline(cmdline)
+  return observe_cmdline(cmdline, "\r")
+end
+
+-- Type `cmdline`, confirm it with <CR>, and check both halves of the behaviour:
+-- that numb previewed the target while it was being typed, and that the cursor
+-- ended up there. Vim resolves all of these addresses itself, so without the
+-- first assertion the second one holds with the plugin uninstalled.
+local function assert_confirmed_jump(cmdline, expected, label)
+  local observed = confirm_cmdline(cmdline)
+  assert(observed.peeking, ("%s: %s must peek while it is being typed"):format(label, cmdline))
+  assert(
+    observed.line == expected,
+    ("%s: %s must preview line %d, previewed %d"):format(label, cmdline, expected, observed.line)
+  )
+  assert_cursor(expected, label)
+end
+
 -------------------------------------------------------------------------------
 -- CORE NAVIGATION TESTS (ABSOLUTE)
 -------------------------------------------------------------------------------
@@ -69,8 +155,7 @@ function Tests.absolute_jump_navigation()
   configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
-  run_cmd ":5\r"
-  assert_cursor(5, "absolute jump to line 5")
+  assert_confirmed_jump(":5", 5, "absolute jump to line 5")
 end
 
 function Tests.absolute_jump_keeps_window_options()
@@ -115,32 +200,28 @@ function Tests.relative_forward_jump()
   configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 10, 0 })
-  run_cmd ":+5\r"
-  assert_cursor(15, "relative forward jump :+5 from line 10")
+  assert_confirmed_jump(":+5", 15, "relative forward jump :+5 from line 10")
 end
 
 function Tests.relative_backward_jump()
   configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 20, 0 })
-  run_cmd ":-5\r"
-  assert_cursor(15, "relative backward jump :-5 from line 20")
+  assert_confirmed_jump(":-5", 15, "relative backward jump :-5 from line 20")
 end
 
 function Tests.relative_forward_single()
   configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 5, 0 })
-  run_cmd ":+\r"
-  assert_cursor(6, "relative forward :+ (implicit 1)")
+  assert_confirmed_jump(":+", 6, "relative forward :+ (implicit 1)")
 end
 
 function Tests.relative_backward_single()
   configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 10, 0 })
-  run_cmd ":-\r"
-  assert_cursor(9, "relative backward :- (implicit 1)")
+  assert_confirmed_jump(":-", 9, "relative backward :- (implicit 1)")
 end
 
 -------------------------------------------------------------------------------
@@ -151,56 +232,49 @@ function Tests.complex_expression_addition()
   configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 10, 0 })
-  run_cmd ":+2+3\r"
-  assert_cursor(15, "complex expression :+2+3 from line 10 = 15")
+  assert_confirmed_jump(":+2+3", 15, "complex expression :+2+3 from line 10 = 15")
 end
 
 function Tests.complex_expression_subtraction()
   configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 20, 0 })
-  run_cmd ":-2-3\r"
-  assert_cursor(15, "complex expression :-2-3 from line 20 = 15")
+  assert_confirmed_jump(":-2-3", 15, "complex expression :-2-3 from line 20 = 15")
 end
 
 function Tests.complex_expression_mixed()
   configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 10, 0 })
-  run_cmd ":+5-2\r"
-  assert_cursor(13, "complex expression :+5-2 from line 10 = 13")
+  assert_confirmed_jump(":+5-2", 13, "complex expression :+5-2 from line 10 = 13")
 end
 
 function Tests.double_plus_signs()
   configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 5, 0 })
-  run_cmd ":++\r"
-  assert_cursor(7, "double plus :++ from line 5 = 7 (5+1+1)")
+  assert_confirmed_jump(":++", 7, "double plus :++ from line 5 = 7 (5+1+1)")
 end
 
 function Tests.double_minus_signs()
   configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 10, 0 })
-  run_cmd ":--\r"
-  assert_cursor(8, "double minus :-- from line 10 = 8 (10-1-1)")
+  assert_confirmed_jump(":--", 8, "double minus :-- from line 10 = 8 (10-1-1)")
 end
 
 function Tests.absolute_with_arithmetic()
   configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
-  run_cmd ":10+5\r"
-  assert_cursor(15, "absolute with arithmetic :10+5 = 15")
+  assert_confirmed_jump(":10+5", 15, "absolute with arithmetic :10+5 = 15")
 end
 
 function Tests.absolute_with_subtraction()
   configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
-  run_cmd ":20-5\r"
-  assert_cursor(15, "absolute with subtraction :20-5 = 15")
+  assert_confirmed_jump(":20-5", 15, "absolute with subtraction :20-5 = 15")
 end
 
 -------------------------------------------------------------------------------
@@ -1097,78 +1171,6 @@ end
 -------------------------------------------------------------------------------
 -- ADDRESS SYNTAX TESTS
 -------------------------------------------------------------------------------
-
--- The 1-indexed line range currently highlighted by the plugin, or nil when
--- nothing is. Found by namespace name rather than through a test-only hook, so
--- the test observes what any other plugin would see.
-local function highlighted_range(bufnr)
-  local ns = vim.api.nvim_get_namespaces()["numb_range"]
-  if not ns then
-    return nil
-  end
-  local marks = vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { details = true })
-  if #marks == 0 then
-    return nil
-  end
-  local first, last
-  for _, mark in ipairs(marks) do
-    local row, details = mark[2], mark[4]
-    local stop = details and details.end_row or row
-    first = first and math.min(first, row) or row
-    last = last and math.max(last, stop) or stop
-  end
-  -- The count is reported alongside the span because merging hides the difference
-  -- between one extmark covering 5..10 and two stale ones that happen to span it,
-  -- and a range is meant to be exactly one extmark however long it is.
-  return { first + 1, last + 1, count = #marks }
-end
-
--- Observe the peek produced by a real command line, then end it with
--- `terminator`. This is the only way to exercise the address parsing path,
--- because `_peek` takes a resolved line number and so bypasses parsing
--- entirely. The observer is registered after numb's own CmdlineChanged handler,
--- so it runs second and sees the result.
-local function observe_cmdline(cmdline, terminator)
-  local numb = require "numb"
-  local observed
-  local group = vim.api.nvim_create_augroup("numb_test_probe", { clear = true })
-  vim.api.nvim_create_autocmd("CmdlineChanged", {
-    group = group,
-    pattern = ":",
-    callback = function()
-      observed = {
-        cmdline = vim.fn.getcmdline(),
-        peeking = numb.is_peeking(),
-        line = vim.api.nvim_win_get_cursor(0)[1],
-        range = highlighted_range(0),
-      }
-    end,
-  })
-  feedkeys(cmdline .. terminator)
-  wait_until_idle()
-  vim.api.nvim_del_augroup_by_id(group)
-  assert(observed ~= nil, ("the probe never observed a CmdlineChanged for %q"):format(cmdline))
-  assert(
-    observed.cmdline == cmdline:sub(2),
-    ("the probe observed %q, expected %q"):format(observed.cmdline, cmdline:sub(2))
-  )
-  return observed
-end
-
--- Abandon the command line with <C-c>, not <Esc>: inside a macro, and feedkeys
--- counts as one, <Esc> executes the command rather than cancelling it (see
--- :h c_<Esc>). So nothing typed through this helper is ever executed.
-local function probe_cmdline(cmdline)
-  return observe_cmdline(cmdline, "<C-c>")
-end
-
--- The same observation, but the command is confirmed instead of abandoned. Vim
--- resolves every address this plugin understands on its own, so asserting only
--- where the cursor ends up after `:$` would hold with numb uninstalled. The
--- observation is what proves the plugin previewed the target first.
-local function confirm_cmdline(cmdline)
-  return observe_cmdline(cmdline, "\r")
-end
 
 function Tests.address_dollar_previews_the_last_line()
   configure()
