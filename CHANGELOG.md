@@ -33,8 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is self-contained. Being disabled on purpose is reported as a warning, not an
   error.
 - A load guard and a way to opt out of loading. numb.nvim sets `vim.g.loaded_numb`
-  when it loads and returns early when it is already set, so a second source of
-  `plugin/numb.lua` no longer installs a second set of autocommands. Setting
+  when it loads and returns early when it is already set, so sourcing
+  `plugin/numb.lua` again no longer calls `setup()` with no arguments and resets
+  the options you had configured. Setting
   `vim.g.loaded_numb = 1` before startup keeps the plugin from loading at all,
   including the `:Numb` command.
 - The Ex line symbols `$` (last line) and `.` (current line) are now previewed,
