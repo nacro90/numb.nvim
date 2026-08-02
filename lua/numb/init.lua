@@ -48,7 +48,12 @@ end
 -- Constants
 -------------------------------------------------------------------------------
 
----Window options that are saved and restored during peeking
+---Window options that are saved and restored during peeking.
+---`number`, `cursorline` and `relativenumber` are each behind an option, because
+---whether they help is a matter of taste. `foldenable` is not: it is always
+---turned off while peeking, since a line inside a closed fold is not on screen at
+---all, so previewing it would scroll the window and show the fold instead of the
+---line that was asked for.
 ---@type string[]
 local TRACKED_WIN_OPTIONS = { "number", "cursorline", "foldenable", "relativenumber" }
 
@@ -223,7 +228,12 @@ local function unpeek(winnr, stay)
   -- Restore original window options
   set_win_options(winnr, orig_state.options)
 
-  -- Always restore cursor first; Vim handles final navigation on confirm
+  -- The cursor goes back to where the peek started, on both paths. On an abort
+  -- that is the whole job. On a confirm it is what makes the jump come *from* the
+  -- origin, so the jumplist entry pushed below records the line the user was
+  -- actually on and <C-o> returns there. The scheduled block then moves to the
+  -- target; Vim's own cursor position is deliberately overridden, see the comment
+  -- there.
   api.nvim_win_set_cursor(winnr, orig_state.cursor)
 
   if stay then
@@ -325,7 +335,12 @@ end
 function numb.on_cmdline_exit()
   -- Stay at the target when the command was confirmed. `CmdlineLeave` fires
   -- before the command runs, so `abort == false` only means Enter was pressed;
-  -- the command itself may still fail.
+  -- the command itself may still fail, and the jump is applied anyway. `:-100`
+  -- from line 5 is the clearest case: Vim rejects the range with E16 and leaves
+  -- the cursor at 5, while numb lands on line 1. That follows from clamping the
+  -- target, which is also what makes `:9999` land on the last line instead of
+  -- erroring, so it is a consequence of a documented choice rather than a
+  -- separate bug.
   local event = api.nvim_get_vvar "event"
   local stay = not event.abort
 
