@@ -1172,6 +1172,109 @@ function Tests.address_non_address_command_does_not_preview()
 end
 
 -------------------------------------------------------------------------------
+-- ADDRESS RESOLUTION UNIT TESTS
+--
+-- `numb.address` is pure: it takes the command line, the line a relative offset
+-- counts from and the last line of the buffer, and returns what to preview. So
+-- these cases need no window, no buffer and no command line, which is what makes
+-- it affordable to cover the shapes that a feedkeys round trip makes expensive.
+-------------------------------------------------------------------------------
+
+-- Each case is { command line as getcmdline() gives it, so with no leading
+-- colon, base line, last line, expected }.
+-- `expected` is nil for "do not preview", { line } for a single address, or
+-- { line, first, last } for a range. Every range case here was measured against
+-- native Vim first; see the separator cases in particular.
+local RESOLVE_CASES = {
+  -- single addresses
+  { "5", 1, 40, { line = 5 } },
+  { "42", 1, 40, { line = 42 } },
+  { "$", 1, 40, { line = 40 } },
+  { "$-3", 1, 40, { line = 37 } },
+  { ".", 20, 40, { line = 20 } },
+  { ".+5", 20, 40, { line = 25 } },
+  { "+5", 10, 40, { line = 15 } },
+  { "-3", 10, 40, { line = 7 } },
+  { "++", 5, 40, { line = 7 } },
+  { "--", 10, 40, { line = 8 } },
+  { "+2+3", 10, 40, { line = 15 } },
+  { "10+5", 1, 40, { line = 15 } },
+  { "5w", 1, 40, { line = 5 } },
+  -- ranges, the second address relative to the cursor after a comma
+  { "5,10d", 1, 40, { line = 5, first = 5, last = 10 } },
+  { "10,5d", 1, 40, { line = 5, first = 10, last = 5 } },
+  { ".,+5y", 20, 40, { line = 20, first = 20, last = 25 } },
+  { "30,$d", 1, 40, { line = 30, first = 30, last = 40 } },
+  { "5,+3d", 20, 40, { line = 5, first = 5, last = 23 } },
+  -- nothing this module can resolve
+  { "help numb", 5, 40, nil },
+  { "'a,'bd", 20, 40, nil },
+  { "%s/a/b/", 20, 40, nil },
+  { "w", 1, 40, nil },
+  { "", 1, 40, nil },
+  -- A trailing separator with nothing after it is not an address chain, so it
+  -- stays with whatever follows rather than being swallowed.
+  { "5,", 1, 40, { line = 5 } },
+}
+
+local function describe_target(target)
+  if target == nil then
+    return "nil"
+  end
+  if target.first then
+    return ("{ line = %d, first = %d, last = %d }"):format(target.line, target.first, target.last)
+  end
+  return ("{ line = %d }"):format(target.line)
+end
+
+function Tests.address_resolve_covers_every_supported_shape()
+  local address = require "numb.address"
+  local failures = {}
+  for _, case in ipairs(RESOLVE_CASES) do
+    local cmdline, base_line, last_line, expected = case[1], case[2], case[3], case[4]
+    local actual = address.resolve(cmdline, base_line, last_line, false)
+    local same = (expected == nil and actual == nil)
+      or (
+        expected ~= nil
+        and actual ~= nil
+        and actual.line == expected.line
+        and actual.first == expected.first
+        and actual.last == expected.last
+      )
+    if not same then
+      table.insert(
+        failures,
+        ("':%s' with base %d: expected %s, got %s"):format(
+          cmdline,
+          base_line,
+          describe_target(expected),
+          describe_target(actual)
+        )
+      )
+    end
+  end
+  assert(#failures == 0, "address.resolve disagreed on:\n  " .. table.concat(failures, "\n  "))
+end
+
+function Tests.address_resolve_honours_number_only()
+  local address = require "numb.address"
+  -- number_only means the command line has to be nothing but the addresses, so
+  -- a trailing command suppresses the preview entirely.
+  assert(address.resolve("15", 1, 40, true) ~= nil, "':15' is only a number")
+  assert(address.resolve("15,20", 1, 40, true) ~= nil, "':15,20' is only addresses")
+  assert(address.resolve("15w", 1, 40, true) == nil, "':15w' carries a command")
+  assert(address.resolve("15,20d", 1, 40, true) == nil, "':15,20d' carries a command")
+  assert(address.resolve("5,", 1, 40, true) == nil, "':5,' has a trailing separator")
+end
+
+function Tests.address_resolve_needs_the_last_line_for_the_dollar_symbol()
+  local address = require "numb.address"
+  -- `$` cannot be resolved without knowing where the buffer ends, and guessing
+  -- would preview the wrong line, so it declines instead.
+  assert(address.resolve("$", 1, nil, false) == nil, "'$' without a last line must not resolve")
+end
+
+-------------------------------------------------------------------------------
 -- HEALTH CHECK TESTS
 -------------------------------------------------------------------------------
 
@@ -1329,6 +1432,10 @@ function Tests.range_peek_swaps_reversed_bounds()
   local observed = probe_cmdline ":10,5d"
   assert_range(observed, 5, 10, "':10,5d'")
 end
+
+
+
+
 
 function Tests.range_peek_resolves_relative_endpoints()
   configure()

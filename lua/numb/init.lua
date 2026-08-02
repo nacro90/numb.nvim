@@ -5,6 +5,8 @@ local api = vim.api
 local fn = vim.fn
 local cmd = vim.cmd
 
+local address = require "numb.address"
+
 -------------------------------------------------------------------------------
 -- Type Definitions
 -------------------------------------------------------------------------------
@@ -114,9 +116,6 @@ local TRACKED_WIN_OPTIONS = { "number", "cursorline", "foldenable", "relativenum
 ---Namespace owning the range highlight, so it can be cleared wholesale without
 ---touching extmarks belonging to anything else.
 local RANGE_NS = api.nvim_create_namespace "numb_range"
-
----Pattern fragment matching a single Ex address this plugin can resolve.
-local ADDRESS = "[%+%-%d%.%$]+"
 
 ---Define the range highlight. `default = true` so a user or colorscheme
 ---definition of `NumbRange` wins; linking to `Visual` means the preview looks
@@ -330,71 +329,8 @@ end
 ---Check if window is currently peeking
 ---@param winnr integer Window handle
 ---@return boolean
-local function is_peeking(winnr)
+local function has_saved_state(winnr)
   return state.win_states[winnr] ~= nil
-end
-
----Parse an Ex command number expression with arithmetic support
----@param str string The expression string (e.g., "+5", "10-3", "++", "$-3", ".+5")
----@param base_line integer|nil Base line for relative expressions
----@param last_line integer|nil Line count of the buffer, the value of `$`
----@return integer|nil Parsed line number or nil if invalid
-local function parse_num_str(str, base_line, last_line)
-  -- Validate input contains only expected characters
-  if not str:match "^[%+%-%d%.%$]+$" then
-    return nil
-  end
-
-  -- Resolve the two Ex line symbols to numbers up front, so the arithmetic below
-  -- only ever sees digits and signs. `.` is the current line and `$` the last
-  -- one, matching Ex addressing.
-  base_line = base_line or api.nvim_win_get_cursor(0)[1]
-  str = str:gsub("%.", tostring(base_line))
-  if str:find "%$" then
-    if not last_line then
-      return nil
-    end
-    str = str:gsub("%$", tostring(last_line))
-  end
-
-  -- Transform consecutive operators into expressions (e.g., "++" -> "+1+")
-  str = str:gsub("([%+%-])([%+%-])", "%11%2")
-  str = str:gsub("([%+%-])([%+%-])", "%11%2") -- second pass for "+++"
-
-  -- Handle trailing operator (":+" means "+1")
-  if str:find "[%+%-]$" then
-    str = str .. 1
-  end
-
-  -- Determine base for relative expressions. A leading `.` or `$` has already
-  -- become a number above, so only a leading sign still needs the base added.
-  local base = 0
-  if str:find "^[%+%-]" then
-    base = base_line
-  end
-
-  -- Safe arithmetic parsing
-  local result = base
-  local current_num = ""
-  local sign = 1
-
-  for i = 1, #str do
-    local char = str:sub(i, i)
-    if char == "+" then
-      result = result + sign * (tonumber(current_num) or 0)
-      current_num = ""
-      sign = 1
-    elseif char == "-" then
-      result = result + sign * (tonumber(current_num) or 0)
-      current_num = ""
-      sign = -1
-    else
-      current_num = current_num .. char
-    end
-  end
-  result = result + sign * (tonumber(current_num) or 0)
-
-  return math.floor(result)
 end
 
 -------------------------------------------------------------------------------
@@ -403,57 +339,42 @@ end
 
 ---Handle command line changes during Ex command input
 function numb.on_cmdline_changed()
-  local cmd_line = fn.getcmdline()
   local winnr = api.nvim_get_current_win()
-  local anchor = state.opts.number_only and "$" or ""
 
-  -- Use original cursor position if already peeking
+  -- While a peek is already running the cursor sits on the previewed line, so
+  -- relative offsets have to count from the saved origin instead. Otherwise
+  -- typing another digit would compound the offset.
   local win_state = state.win_states[winnr]
   local base_line = win_state and win_state.cursor[1] or api.nvim_win_get_cursor(winnr)[1]
   local last_line = api.nvim_buf_line_count(api.nvim_win_get_buf(winnr))
 
-  -- Ranges are tried first. The single address branch below would otherwise
-  -- match only the first address of `:5,10d` and preview line 5 alone, which
-  -- looks like a confirmation of the range while showing none of it.
-  if state.opts.range_peek then
-    local first_str, last_str = cmd_line:match("^(" .. ADDRESS .. "),(" .. ADDRESS .. ")" .. anchor)
-    if first_str then
-      local first = parse_num_str(first_str, base_line, last_line)
-      local last = parse_num_str(last_str, base_line, last_line)
-      if first and last then
-        unpeek(winnr, false)
-        -- Preview the lower bound so the start of the range is on screen. That
-        -- is also where `:d` leaves the cursor, but only `:d`: `:y` does not
-        -- move it at all, and `:m`, `:t` and `:s` finish near their
-        -- destination. So this is a deliberate choice of what to show, not a
-        -- prediction of where Vim will land.
-        peek(winnr, math.min(first, last))
-        highlight_range(winnr, first, last)
-        cmd "redraw"
-        return
-      end
-    end
-  end
+  local target = address.resolve(fn.getcmdline(), base_line, last_line, state.opts.number_only)
 
-  local num_str = cmd_line:match("^(" .. ADDRESS .. ")" .. anchor)
-
-  if num_str then
-    local target_line = parse_num_str(num_str, base_line, last_line)
-    if target_line then
+  if not target then
+    if has_saved_state(winnr) then
       unpeek(winnr, false)
-      peek(winnr, target_line)
       cmd "redraw"
     end
-  elseif is_peeking(winnr) then
-    unpeek(winnr, false)
-    cmd "redraw"
+    return
   end
+
+  unpeek(winnr, false)
+  -- `target.line` is the lower bound of a range, so the start of it is on
+  -- screen. That is also where `:d` leaves the cursor, but only `:d`: `:y` does
+  -- not move it at all, and `:m`, `:t` and `:s` finish near their destination.
+  -- So this is a deliberate choice of what to show, not a prediction of where
+  -- Vim will land.
+  peek(winnr, target.line)
+  if state.opts.range_peek and target.first then
+    highlight_range(winnr, target.first, target.last)
+  end
+  cmd "redraw"
 end
 
 ---Handle command line exit
 function numb.on_cmdline_exit()
   local winnr = api.nvim_get_current_win()
-  if not is_peeking(winnr) then
+  if not has_saved_state(winnr) then
     return
   end
   -- Stay at target if command was confirmed (not aborted)
