@@ -73,7 +73,8 @@ branch, tag, or commit hash, or a range built with `vim.version.range()`:
 
 ```lua
 vim.pack.add {
-  { src = 'https://github.com/nacro90/numb.nvim', version = 'v1.1.0' },
+  -- Any 1.x release. A tag such as 'v1.2.0' or a commit hash works too.
+  { src = 'https://github.com/nacro90/numb.nvim', version = vim.version.range('1.x') },
 }
 ```
 
