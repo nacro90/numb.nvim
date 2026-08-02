@@ -98,6 +98,19 @@ config already depends on it, and prefer lazy.nvim or `vim.pack` for new setups.
 use 'nacro90/numb.nvim'
 ```
 
+### Opting out of auto-loading
+
+numb.nvim calls `setup()` itself from `plugin/numb.lua`, so it works as soon as
+it is on your `runtimepath`. To keep it from loading at all, set the guard
+variable before startup:
+
+```lua
+vim.g.loaded_numb = 1
+```
+
+The plugin sets the same variable once it has loaded, so sourcing
+`plugin/numb.lua` a second time does nothing.
+
 ## Usage
 
 Setup with default options:
