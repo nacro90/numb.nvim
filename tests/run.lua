@@ -904,7 +904,6 @@ function Tests.closing_a_peeked_window_reclaims_its_saved_state()
   close_other_windows()
 end
 
-
 function Tests.disable_after_peeked_window_closed_still_disables()
   local numb = configure()
   reset_buffer()
@@ -1055,10 +1054,7 @@ function Tests.config_sanitize_states_every_rule()
       kept = config.sanitize(case.input)
     end)
     if not vim.deep_equal(kept, case.kept) then
-      table.insert(
-        failures,
-        ("%s: kept %s, expected %s"):format(case.label, vim.inspect(kept), vim.inspect(case.kept))
-      )
+      table.insert(failures, ("%s: kept %s, expected %s"):format(case.label, vim.inspect(kept), vim.inspect(case.kept)))
     end
     if #messages ~= case.warnings then
       table.insert(failures, ("%s: %d warnings, expected %d"):format(case.label, #messages, case.warnings))
