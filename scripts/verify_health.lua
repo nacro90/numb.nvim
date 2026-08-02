@@ -30,8 +30,7 @@ for _, line in ipairs(report) do
 end
 
 if #problems > 0 then
-  io.stderr:write("checkhealth numb reported errors on a healthy plugin:\n")
-  io.stderr:write(table.concat(problems, "\n") .. "\n")
+  io.stderr:write("checkhealth numb reported errors on a healthy plugin:\n" .. table.concat(problems, "\n") .. "\n")
   os.exit(1)
 end
 
