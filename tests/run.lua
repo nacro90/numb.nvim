@@ -269,16 +269,25 @@ function Tests.state_peek_cursor_cleared_after_jump()
   assert(state.peek_cursor == nil, "peek_cursor should be nil after confirmed jump")
 end
 
-function Tests.state_reset_method_clears_state()
+function Tests.disable_drops_state_left_behind_by_a_window_that_is_gone()
   local numb = configure()
   reset_buffer()
-  -- Manually populate state to test reset
-  numb._state.win_states[999] = { cursor = { 1, 0 }, options = {}, topline = 1 }
+  -- An entry for a window that no longer exists is what an interrupted peek can
+  -- leave behind. disable() is the only thing that resets this state, so it is
+  -- exercised through that rather than by reaching for an internal method.
+  numb._state.win_states[999] = {
+    bufnr = vim.api.nvim_get_current_buf(),
+    cursor = { 1, 0 },
+    options = {},
+    topline = 1,
+  }
   numb._state.peek_cursor = { 10, 0 }
-  -- Reset should clear everything
-  numb._state:reset()
-  assert(vim.tbl_isempty(numb._state.win_states), "win_states cleared by reset")
-  assert(numb._state.peek_cursor == nil, "peek_cursor cleared by reset")
+
+  numb.disable()
+
+  assert(vim.tbl_isempty(numb._state.win_states), "disable must drop saved state, stale entries included")
+  assert(numb._state.peek_cursor == nil, "disable must clear the pending target")
+  numb.enable()
 end
 
 function Tests.state_configure_merges_options()

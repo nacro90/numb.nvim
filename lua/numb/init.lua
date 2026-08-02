@@ -26,34 +26,23 @@ local config = require "numb.config"
 ---time, because `CmdlineLeave` always tears the current peek down before
 ---another one can start.
 ---@field opts NumbConfig Configuration options
-local State = {}
-State.__index = State
 
----Create a new state instance
----@return NumbState
-function State.new()
-  local self = setmetatable({}, State)
-  self.win_states = {}
-  self.peek_cursor = nil
-  self.opts = config.resolve(nil)
-  return self
+-- One instance is all there can ever be, which is why this is a plain table and
+-- not a class with a constructor: `peek_cursor` is shared rather than per-window
+-- precisely because at most one window peeks at a time. Exposed for testing as
+-- `numb._state`.
+---@type NumbState
+local state = {
+  win_states = {},
+  peek_cursor = nil,
+  opts = config.resolve(nil),
+}
+
+---Drop the per-peek state, keeping the configuration.
+local function reset_state()
+  state.win_states = {}
+  state.peek_cursor = nil
 end
-
----Reset mutable state (preserves opts)
-function State:reset()
-  self.win_states = {}
-  self.peek_cursor = nil
-end
-
----Update configuration options. Any value is accepted; anything that is not a
----valid option is reported and ignored (see `numb.config`).
----@param user_opts NumbConfig|any
-function State:configure(user_opts)
-  self.opts = config.resolve(user_opts)
-end
-
--- Module-level state instance (exposed for testing as numb._state)
-local state = State.new()
 
 -------------------------------------------------------------------------------
 -- Constants
@@ -489,7 +478,7 @@ end
 ---@param user_opts NumbConfig|nil Optional config override
 function numb.enable(user_opts)
   if user_opts then
-    state:configure(user_opts)
+    state.opts = config.resolve(user_opts)
   end
   if numb.is_enabled() then
     return
@@ -502,7 +491,7 @@ end
 ---raising, so a typo cannot leave the plugin uninstalled.
 ---@param user_opts NumbConfig|any Configuration options
 function numb.setup(user_opts)
-  state:configure(user_opts)
+  state.opts = config.resolve(user_opts)
   install_autocmds()
   install_user_command()
 end
@@ -515,7 +504,7 @@ function numb.disable()
   for _, winnr in ipairs(vim.tbl_keys(state.win_states)) do
     pcall(unpeek, winnr, false)
   end
-  state:reset()
+  reset_state()
   if augroup_id then
     pcall(api.nvim_del_augroup_by_id, augroup_id)
     augroup_id = nil
