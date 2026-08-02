@@ -56,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worked (#26). Invalid configuration never raises, so a typo cannot leave the
   plugin uninstalled.
 
+### Removed
+- `require('numb').on_cmdline_changed()` and `require('numb').on_cmdline_exit()`
+  are no longer part of the module. They are the plugin's own autocommand
+  callbacks, exported only so the autocommands could reach them, and the help
+  file said there was no reason to call them. They are now local and wired
+  straight into the autocommands. If you were calling them, open an issue and
+  they can come back.
+
 ### Fixed
 - Confirming a command that deletes lines near the end of the buffer, such as
   `:38,40d` in a 40 line buffer, no longer reports

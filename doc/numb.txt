@@ -290,21 +290,6 @@ numb.is_peeking({winnr})
                 Return: ~
                     (`boolean`) `true` while that window is peeking.
 
-------------------------------------------------------------------------------
-The two functions below are the autocommand callbacks numb.nvim installs on
-|CmdlineChanged| and |CmdlineLeave|. They are part of the module only so the
-autocommands can reach them; there is no reason to call them yourself.
-
-                                                   *numb.on_cmdline_changed()*
-numb.on_cmdline_changed()
-                Parse the current command line and start, move or end the
-                peek accordingly.
-
-                                                      *numb.on_cmdline_exit()*
-numb.on_cmdline_exit()
-                End the peek, keeping the new position when the command was
-                confirmed and restoring the window when it was aborted.
-
 ==============================================================================
 8. Statusline integration                                    *numb-statusline*
 

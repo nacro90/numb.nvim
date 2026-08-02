@@ -294,11 +294,14 @@ local function has_saved_state(winnr)
 end
 
 -------------------------------------------------------------------------------
--- Public API
+-- Autocommand Callbacks
+--
+-- Local: they are wired straight into `nvim_create_autocmd` below, so nothing
+-- outside this file needs a name for them.
 -------------------------------------------------------------------------------
 
 ---Handle command line changes during Ex command input
-function numb.on_cmdline_changed()
+local function on_cmdline_changed()
   local winnr = api.nvim_get_current_win()
 
   -- While a peek is already running the cursor sits on the previewed line, so
@@ -332,7 +335,7 @@ function numb.on_cmdline_changed()
 end
 
 ---Handle command line exit
-function numb.on_cmdline_exit()
+local function on_cmdline_exit()
   -- Stay at the target when the command was confirmed. `CmdlineLeave` fires
   -- before the command runs, so `abort == false` only means Enter was pressed;
   -- the command itself may still fail, and the jump is applied anyway. `:-100`
@@ -373,12 +376,12 @@ local function install_autocmds()
   api.nvim_create_autocmd("CmdlineChanged", {
     group = augroup_id,
     pattern = ":",
-    callback = numb.on_cmdline_changed,
+    callback = on_cmdline_changed,
   })
   api.nvim_create_autocmd("CmdlineLeave", {
     group = augroup_id,
     pattern = ":",
-    callback = numb.on_cmdline_exit,
+    callback = on_cmdline_exit,
   })
   api.nvim_create_autocmd("ColorScheme", {
     group = augroup_id,

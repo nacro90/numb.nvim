@@ -13,6 +13,23 @@ Items are grouped by priority (P1 highest). Status icons:
 
 ---
 
+## Open decision for the next release
+
+Two functions were removed from the public module in the unreleased work:
+`numb.on_cmdline_changed()` and `numb.on_cmdline_exit()`. Both were autocommand
+callbacks that the help file described as having no reason to be called, and
+both are now local. Nothing in the plugin or its tests used them from outside.
+
+Under strict SemVer, removing anything from the public surface is a major bump,
+which would make the next release `2.0.0` rather than `1.2.0`. The practical
+risk is close to zero: calling either function directly does nothing useful, and
+the version they were introduced in never advertised them as an integration
+point. Decide this deliberately at tagging time rather than by default. Keeping
+`1.2.0` means accepting a documented, deliberate exception; the alternative is
+`2.0.0` for a change no user will notice.
+
+---
+
 ## Next: Toward v1.2.0
 
 ### P1: Range peek 🚧
