@@ -937,6 +937,64 @@ local function capture_notifications(fn)
   return messages
 end
 
+-- What `numb.config` does with each shape of input, as a table. These need no
+-- window, no buffer and no setup() call, which is what makes it cheap to state
+-- every rule in one place instead of one test per rule.
+local SANITIZE_CASES = {
+  { label = "nil", input = nil, kept = {}, warnings = 0 },
+  { label = "a string", input = "yes", kept = {}, warnings = 1 },
+  { label = "a number", input = 42, kept = {}, warnings = 1 },
+  { label = "a function", input = print, kept = {}, warnings = 1 },
+  { label = "an empty table", input = {}, kept = {}, warnings = 0 },
+  { label = "a valid option", input = { number_only = true }, kept = { number_only = true }, warnings = 0 },
+  { label = "a misspelled option", input = { show_nubmers = true }, kept = {}, warnings = 1 },
+  { label = "a wrongly typed option", input = { centered_peeking = "yes" }, kept = {}, warnings = 1 },
+  {
+    label = "one good option and one unknown",
+    input = { range_peek = false, bogus = 1 },
+    kept = { range_peek = false },
+    warnings = 1,
+  },
+  {
+    label = "two offenders",
+    input = { nope = true, show_numbers = 1 },
+    kept = {},
+    warnings = 2,
+  },
+}
+
+function Tests.config_sanitize_states_every_rule()
+  local config = require "numb.config"
+  local failures = {}
+  for _, case in ipairs(SANITIZE_CASES) do
+    local kept
+    local messages = capture_notifications(function()
+      kept = config.sanitize(case.input)
+    end)
+    if not vim.deep_equal(kept, case.kept) then
+      table.insert(
+        failures,
+        ("%s: kept %s, expected %s"):format(case.label, vim.inspect(kept), vim.inspect(case.kept))
+      )
+    end
+    if #messages ~= case.warnings then
+      table.insert(failures, ("%s: %d warnings, expected %d"):format(case.label, #messages, case.warnings))
+    end
+  end
+  assert(#failures == 0, "config.sanitize disagreed on:\n  " .. table.concat(failures, "\n  "))
+end
+
+function Tests.config_resolve_never_writes_through_to_the_defaults()
+  local config = require "numb.config"
+  local before = vim.deepcopy(config.DEFAULTS)
+  local resolved = config.resolve { show_numbers = false, range_peek = false }
+  -- Mutating what a caller was handed must not reconfigure everyone else, which
+  -- is the failure mode a shared defaults table invites.
+  resolved.show_cursorline = false
+  assert(vim.deep_equal(config.DEFAULTS, before), "resolve() must not write through to the defaults")
+  assert(config.resolve(nil).show_cursorline == true, "a later resolve must still see the real default")
+end
+
 function Tests.config_unknown_option_warns_and_is_dropped()
   local numb = configure()
   local messages = capture_notifications(function()

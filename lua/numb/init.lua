@@ -6,6 +6,7 @@ local fn = vim.fn
 local cmd = vim.cmd
 
 local address = require "numb.address"
+local config = require "numb.config"
 
 -------------------------------------------------------------------------------
 -- Type Definitions
@@ -18,14 +19,6 @@ local address = require "numb.address"
 ---@field options table<string, boolean> Saved window options
 ---@field topline integer Saved topline for view restoration
 
----@class NumbConfig
----@field show_numbers boolean Enable 'number' for the window while peeking
----@field show_cursorline boolean Enable 'cursorline' for the window while peeking
----@field hide_relativenumbers boolean Disable 'relativenumber' for the window while peeking
----@field number_only boolean Peek only when command is purely numeric
----@field centered_peeking boolean Center peeked line in window
----@field range_peek boolean Highlight the whole line range for `:N,M{cmd}`
-
 ---@class NumbState
 ---@field win_states table<integer, NumbWinState> Per-window saved state
 ---@field peek_cursor integer[]|nil Target cursor position for confirmed jump.
@@ -36,58 +29,13 @@ local address = require "numb.address"
 local State = {}
 State.__index = State
 
----Default configuration values
----@type NumbConfig
-local DEFAULT_OPTS = {
-  show_numbers = true,
-  show_cursorline = true,
-  hide_relativenumbers = true,
-  number_only = false,
-  centered_peeking = true,
-  range_peek = true,
-}
-
----Drop unknown and wrongly typed options, warning once per offending key.
----`DEFAULT_OPTS` is the only specification: a key it does not carry is unknown,
----and the type of its default is the expected type.
----Never raises: a typo in the user's config must not break `setup()` and leave
----the plugin uninstalled, so every rejected value falls back to its default.
----@param user_opts any Anything the user passed to `setup()` or `enable()`
----@return table
-local function sanitize_opts(user_opts)
-  if user_opts == nil then
-    return {}
-  end
-
-  if type(user_opts) ~= "table" then
-    vim.notify(("[numb] setup() expects a table, got %s; using defaults"):format(type(user_opts)), vim.log.levels.WARN)
-    return {}
-  end
-
-  local sanitized = {}
-  for key, value in pairs(user_opts) do
-    local default = DEFAULT_OPTS[key]
-    if default == nil then
-      vim.notify(("[numb] unknown option '%s' ignored"):format(tostring(key)), vim.log.levels.WARN)
-    elseif type(value) ~= type(default) then
-      vim.notify(
-        ("[numb] option '%s' expects a %s, got %s; keeping the default"):format(key, type(default), type(value)),
-        vim.log.levels.WARN
-      )
-    else
-      sanitized[key] = value
-    end
-  end
-  return sanitized
-end
-
 ---Create a new state instance
 ---@return NumbState
 function State.new()
   local self = setmetatable({}, State)
   self.win_states = {}
   self.peek_cursor = nil
-  self.opts = vim.tbl_deep_extend("force", {}, DEFAULT_OPTS)
+  self.opts = config.resolve(nil)
   return self
 end
 
@@ -98,10 +46,10 @@ function State:reset()
 end
 
 ---Update configuration options. Any value is accepted; anything that is not a
----valid option is reported and ignored (see `sanitize_opts`).
+---valid option is reported and ignored (see `numb.config`).
 ---@param user_opts NumbConfig|any
 function State:configure(user_opts)
-  self.opts = vim.tbl_deep_extend("force", DEFAULT_OPTS, sanitize_opts(user_opts))
+  self.opts = config.resolve(user_opts)
 end
 
 -- Module-level state instance (exposed for testing as numb._state)
