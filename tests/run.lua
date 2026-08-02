@@ -1412,7 +1412,12 @@ function Tests.range_peek_highlight_group_is_overridable()
   require("numb").setup { centered_peeking = false }
   local hl = vim.api.nvim_get_hl(0, { name = "NumbRange" })
   assert(hl.bg == tonumber("123456", 16), "a user defined NumbRange must not be overwritten by setup()")
-  vim.api.nvim_set_hl(0, "NumbRange", {})
+  -- Restore the link rather than clearing the group. `default = true` is a
+  -- condition on the set, not a property that can be put back: once NumbRange
+  -- has any explicit definition, including an empty one, a defaulted set is
+  -- ignored. Clearing here would leave the range highlight invisible for every
+  -- test that runs after this one.
+  vim.api.nvim_set_hl(0, "NumbRange", { link = "Visual" })
 end
 
 local M = {}
