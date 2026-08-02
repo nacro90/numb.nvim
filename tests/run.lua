@@ -1407,6 +1407,30 @@ function Tests.health_reports_ok_when_enabled()
   assert(#health_entries(records, "error") == 0, "an enabled plugin must report no errors")
 end
 
+function Tests.health_reports_the_user_command_only_while_enabled()
+  local numb = configure()
+  local records = capture_health()
+  -- Missing from the report entirely is the failure this guards: reporting the
+  -- command is conditional, and reading the condition off an undefined local
+  -- silently drops the line rather than raising.
+  assert(
+    health_matches(records, "ok", ":Numb` user command is registered") ~= nil,
+    "an enabled plugin must report that :Numb is registered"
+  )
+
+  numb.disable()
+  local disabled_records = capture_health()
+  assert(
+    health_matches(disabled_records, "ok", ":Numb` user command") == nil,
+    "a disabled plugin must not repeat the command state; the disable warning already said why"
+  )
+  assert(
+    health_matches(disabled_records, "warn", "unavailable") == nil,
+    "and must not warn about the command either, since disable() leaves it installed"
+  )
+  numb.enable()
+end
+
 function Tests.health_warns_rather_than_errors_when_deliberately_disabled()
   local numb = configure()
   numb.disable()

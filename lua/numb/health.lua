@@ -79,8 +79,9 @@ end
 ---@param numb table The loaded `numb` module
 local function check_status(numb)
   local command_registered = api.nvim_get_commands({ builtin = false }).Numb ~= nil
+  local enabled = numb.is_enabled()
 
-  if numb.is_enabled() then
+  if enabled then
     vim.health.ok "Enabled: peeking autocommands are installed"
     local missing = missing_group_events()
     if missing == nil then
