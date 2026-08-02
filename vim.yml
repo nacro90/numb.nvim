@@ -24,3 +24,12 @@ globals:
     any: true
   bit:
     any: true
+
+  # Selene's lua51 std declares `io` but types the standard file handles as
+  # plain values, so `io.stderr:write(...)` reads as a field that does not
+  # exist. The scripts under scripts/ report diagnostics there before exiting
+  # non-zero, which is the whole mechanism by which a gate fails.
+  io.stderr:
+    any: true
+  io.stdout:
+    any: true
