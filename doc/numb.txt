@@ -37,9 +37,14 @@ A target past either end of the buffer is clamped to the first or the last
 line. A command line that does not start with a line address, such as
 `:write`, never triggers a peek.
 
-Peeking is per window. Two splits showing the same buffer never affect each
-other, and a peek in a window that is not the current one is restored
-independently.
+Peeking is per window: the cursor, the window options and |w:numb_peeking|
+belong to the window being peeked, so two splits showing the same buffer never
+disturb each other's view, and a peek in a window that is not the current one
+is restored independently.
+
+The range highlight described under |numb-range_peek| is the one exception. A
+highlight is attached to the buffer rather than to a window, so while you type
+`:5,10d` in one split the range is visible in every split showing that buffer.
 
 ==============================================================================
 2. Requirements                                            *numb-requirements*
@@ -196,6 +201,10 @@ range_peek                                                   *numb-range_peek*
                 `:.,+5`, `:10,+3` and `:30,$` all work. Ranges using marks or
                 searches, `:'a,'b` and `:/pat/,/pat/`, are left to Vim and are
                 not highlighted.
+
+                The highlight belongs to the buffer, not to the window, so it
+                shows up in every split displaying that buffer. The rest of
+                the peek stays per window; see |numb-intro|.
 
                                                                   *NumbRange*
                 The range highlight uses this group, linked to |hl-Visual| by

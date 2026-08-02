@@ -183,6 +183,10 @@ Override it whenever you like, before or after `setup()`:
 vim.api.nvim_set_hl(0, 'NumbRange', { bg = '#3a3a50' })
 ```
 
+The highlight belongs to the buffer rather than the window, so it shows up in
+every split displaying that buffer. The cursor, the window options and
+`vim.w.numb_peeking` stay per window.
+
 After running `setup`, you are good to go. You can try with entering a number to
 the vim command line like `:3`.
 

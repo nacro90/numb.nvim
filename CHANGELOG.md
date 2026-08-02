@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are accepted, endpoints may use `.`, `$` and arithmetic (`:.,+5`, `:30,$`),
   and mark or search ranges are left to Vim untouched. Controlled by the new
   `range_peek` option, on by default; the highlight group is `NumbRange`, linked
-  to `Visual` unless you define your own.
+  to `Visual` unless you define your own. The highlight belongs to the buffer,
+  so it appears in every split showing that buffer, while the cursor and the
+  window options stay per window as before.
 - Vimdoc help file, so `:h numb` works from inside Neovim. Every option and
   public function has its own tag (`:h numb-options`, `:h numb.setup()`), and CI
   derives the required tags from the Lua sources, so adding an option without
