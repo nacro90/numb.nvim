@@ -104,12 +104,18 @@ local function check_status(numb)
     })
   end
 
-  if command_registered then
-    vim.health.ok "`:Numb` user command is registered"
-  else
-    vim.health.warn("`:Numb enable` / `:Numb disable` / `:Numb toggle` are unavailable", {
-      "The `:Numb` command is installed by `setup()` only.",
-    })
+  -- Only reported when peeking is on. When it is off, the branches above have
+  -- already said why, and a missing `:Numb` is the same fact told twice: the
+  -- command and the autocommands are both installed by `setup()`.
+  if enabled then
+    if command_registered then
+      vim.health.ok "`:Numb` user command is registered"
+    else
+      vim.health.warn("`:Numb enable` / `:Numb disable` / `:Numb toggle` are unavailable", {
+        "Peeking is installed but the command is not, which should not happen.",
+        "Calling `require('numb').setup()` again installs both.",
+      })
+    end
   end
 end
 
@@ -141,7 +147,9 @@ local function check_peek_state(numb, state)
   if #stale > 0 then
     local message = ("Saved state for %d window(s) that no longer exist: %s"):format(#stale, table.concat(stale, ", "))
     vim.health.warn(message, {
-      "Harmless, but it means a window was closed mid-peek and its entry leaked.",
+      "Harmless in itself. A peek interrupted by a window closing is cleaned up",
+      "on `CmdlineLeave`, so an entry surviving here means that never ran:",
+      "the `numb` augroup was cleared, or the entry was not written by a peek.",
       "`:Numb disable` followed by `:Numb enable` clears it.",
     })
   end
