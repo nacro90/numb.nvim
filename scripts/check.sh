@@ -143,7 +143,7 @@ if [ "$run_nvim" -eq 1 ]; then
   nvim --version | sed -n '1p'
 
   echo "==> Neovim smoke test"
-  nvim --headless +"lua require('numb').setup()" +qall
+  nvim -l scripts/verify_load.lua
 
   echo "==> Plugin tests"
   nvim --headless -u tests/init.lua -i NONE -n +"lua require('tests.run').run()" +qall
