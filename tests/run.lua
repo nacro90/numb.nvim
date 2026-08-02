@@ -4,11 +4,14 @@ local function feedkeys(cmd)
 end
 
 local function wait_until_idle()
+  -- vim.wait returns `false, -1` on timeout, and a single assignment keeps only
+  -- the boolean, so `ok ~= -1` was always true and this guard could never fire.
+  -- Assert the boolean itself: false means the mode never settled.
   local ok = vim.wait(1000, function()
     local mode = vim.api.nvim_get_mode()
     return mode.mode == "n" and not mode.blocking
   end, 10, false)
-  assert(ok ~= -1, "timeout waiting for command completion")
+  assert(ok, "timeout waiting for command completion")
 end
 
 local function run_cmd(cmd)
