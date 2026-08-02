@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   destructive command such as `:50,80d` can be checked before it runs. Neovim
   previews `:substitute` through `inccommand` but nothing else, so `:d`, `:y`,
   `:m`, `:t` and `:g` previously had no preview at all. The lower bound is also
-  peeked, since that is where Vim leaves the cursor afterwards. Reversed bounds
+  peeked, so the start of the range is on screen; that is where `:d` leaves the
+  cursor, while `:y` does not move it and `:m`, `:t` and `:s` finish near their
+  destination. Reversed bounds
   are accepted, endpoints may use `.`, `$` and arithmetic (`:.,+5`, `:30,$`),
   and mark or search ranges are left to Vim untouched. Controlled by the new
   `range_peek` option, on by default; the highlight group is `NumbRange`, linked

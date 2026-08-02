@@ -422,8 +422,11 @@ function numb.on_cmdline_changed()
       local last = parse_num_str(last_str, base_line, last_line)
       if first and last then
         unpeek(winnr, false)
-        -- Vim leaves the cursor at the start of the range after such a command,
-        -- so previewing the lower bound shows where you will actually land.
+        -- Preview the lower bound so the start of the range is on screen. That
+        -- is also where `:d` leaves the cursor, but only `:d`: `:y` does not
+        -- move it at all, and `:m`, `:t` and `:s` finish near their
+        -- destination. So this is a deliberate choice of what to show, not a
+        -- prediction of where Vim will land.
         peek(winnr, math.min(first, last))
         highlight_range(winnr, first, last)
         cmd "redraw"

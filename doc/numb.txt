@@ -193,8 +193,10 @@ range_peek                                                   *numb-range_peek*
                 but nothing else, so `:d`, `:y`, `:m`, `:t` and `:g` get no
                 native preview at all.
 
-                The lower bound is also previewed as an ordinary peek, since
-                that is where Vim leaves the cursor after the command.
+                The lower bound is also previewed as an ordinary peek, so the
+                start of the range is on screen. That is where `:d` leaves the
+                cursor, but only `:d`: `:y` does not move the cursor at all,
+                and `:m`, `:t` and `:s` finish near their destination.
                 Reversed bounds are accepted: `:10,5` highlights 5 through 10.
 
                 Endpoints may be numbers, `.`, `$`, or arithmetic on those, so

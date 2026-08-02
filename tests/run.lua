@@ -1316,8 +1316,9 @@ function Tests.range_peek_highlights_the_whole_range()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   local observed = probe_cmdline ":5,10d"
   assert_range(observed, 5, 10, "':5,10d'")
-  -- Vim leaves the cursor at the start of the range after such a command, so
-  -- previewing the start line is what matches where you will actually end up.
+  -- The lower bound is previewed so the start of the range is on screen. For
+  -- `:d` that also happens to be where Vim leaves the cursor; for `:y`, `:m`,
+  -- `:t` and `:s` it is not, so this asserts a deliberate choice.
   assert(observed.line == 5, ("the start line must be previewed, got %d"):format(observed.line))
 end
 
