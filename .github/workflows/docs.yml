@@ -150,7 +150,10 @@ jobs:
               if line:match "^<" then
                 in_defaults_block = false
               else
-                local key, value = line:match "^%s*([%w_]+)%s*=%s*(.-),%s*$"
+                -- The trailing comma is optional: leaving it off the last entry
+                -- is valid Lua, and requiring it would report that option as
+                -- undocumented, which points at the wrong problem.
+                local key, value = line:match "^%s*([%w_]+)%s*=%s*(.-),?%s*$"
                 if key then
                   documented_defaults[key] = value
                 end
