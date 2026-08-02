@@ -1117,7 +1117,10 @@ local function highlighted_range(bufnr)
     first = first and math.min(first, row) or row
     last = last and math.max(last, stop) or stop
   end
-  return { first + 1, last + 1 }
+  -- The count is reported alongside the span because merging hides the difference
+  -- between one extmark covering 5..10 and two stale ones that happen to span it,
+  -- and a range is meant to be exactly one extmark however long it is.
+  return { first + 1, last + 1, count = #marks }
 end
 
 -- Observe the peek produced by a real command line, then end it with
@@ -1475,6 +1478,10 @@ end
 
 local function assert_range(observed, expected_first, expected_last, label)
   assert(observed.range ~= nil, ("%s: expected a highlighted range, got none"):format(label))
+  assert(
+    observed.range.count == 1,
+    ("%s: a range must be exactly one extmark, found %d"):format(label, observed.range.count)
+  )
   assert(
     observed.range[1] == expected_first and observed.range[2] == expected_last,
     ("%s: expected range %d..%d, got %d..%d"):format(
