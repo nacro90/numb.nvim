@@ -13,7 +13,9 @@ way.
   moves once you confirm with Enter.
 - **Range preview.** Typing `:50,80d` highlights lines 50 through 80 before you
   press Enter. Neovim previews `:substitute` via `inccommand` but nothing else,
-  so `:d`, `:y`, `:m`, `:t` and `:g` had no preview at all.
+  so `:d`, `:y`, `:m`, `:t` and `:g` had no preview at all. Both Ex separators
+  are followed, and when more than two addresses are given the last two win, so
+  `:5,10,15d` highlights the 10 through 15 that Ex will really act on.
 - **Ex line symbols.** `:$` previews the last line and `:.` the current one,
   including arithmetic on either (`:$-3`, `:.+5`). Targets past the start or end
   of the buffer are clamped rather than rejected.

@@ -1206,6 +1206,15 @@ local RESOLVE_CASES = {
   { ".,+5y", 20, 40, { line = 20, first = 20, last = 25 } },
   { "30,$d", 1, 40, { line = 30, first = 30, last = 40 } },
   { "5,+3d", 20, 40, { line = 5, first = 5, last = 23 } },
+  -- Ex acts on the last two addresses when more are given, and `;` moves the
+  -- line that following offsets count from. Measured: `:5,10,15d` deletes
+  -- 10..15, `:5;+3d` deletes 5..8, `:5,10;+2d` deletes 10..12 and
+  -- `:5;+3,+6d` deletes 8..11.
+  { "5,10,15d", 1, 40, { line = 10, first = 10, last = 15 } },
+  { "5;10;15d", 1, 40, { line = 10, first = 10, last = 15 } },
+  { "5;+3d", 1, 40, { line = 5, first = 5, last = 8 } },
+  { "5,10;+2d", 1, 40, { line = 10, first = 10, last = 12 } },
+  { "5;+3,+6d", 1, 40, { line = 8, first = 8, last = 11 } },
   -- nothing this module can resolve
   { "help numb", 5, 40, nil },
   { "'a,'bd", 20, 40, nil },
@@ -1272,6 +1281,7 @@ function Tests.address_resolve_needs_the_last_line_for_the_dollar_symbol()
   -- `$` cannot be resolved without knowing where the buffer ends, and guessing
   -- would preview the wrong line, so it declines instead.
   assert(address.resolve("$", 1, nil, false) == nil, "'$' without a last line must not resolve")
+  assert(address.resolve("10,$d", 1, nil, false) == nil, "'$' as an endpoint must not resolve either")
 end
 
 -------------------------------------------------------------------------------
@@ -1433,9 +1443,50 @@ function Tests.range_peek_swaps_reversed_bounds()
   assert_range(observed, 5, 10, "':10,5d'")
 end
 
+function Tests.range_peek_uses_the_last_two_of_three_addresses()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  -- Measured against native Vim: ':5,10,15d' deletes 10 through 15, because Ex
+  -- uses the last two addresses when more are given. Highlighting 5 through 10
+  -- would mark six lines that survive and leave the six that do not unmarked,
+  -- which is worse than showing nothing.
+  local observed = probe_cmdline ":5,10,15d"
+  assert_range(observed, 10, 15, "':5,10,15d'")
+  assert(observed.line == 10, ("the effective range starts at 10, previewed %d"):format(observed.line))
+end
 
+function Tests.range_peek_semicolon_rebases_the_next_address()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  -- Measured: ':5;+3d' deletes 5 through 8. A semicolon moves the line that
+  -- following offsets count from onto the address before it.
+  local observed = probe_cmdline ":5;+3d"
+  assert_range(observed, 5, 8, "':5;+3d'")
+end
 
+function Tests.range_peek_comma_does_not_rebase_the_next_address()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 20, 0 })
+  -- The discriminator for the test above: measured, ':5,+3d' from line 20
+  -- deletes 5 through 23, so the offset is still counted from the cursor. If
+  -- both separators were treated alike, one of these two tests would fail.
+  local observed = probe_cmdline ":5,+3d"
+  assert_range(observed, 5, 23, "':5,+3d' from line 20")
+end
 
+function Tests.range_peek_mixed_separators_follow_ex_semantics()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  -- Measured: ':5;+3,+6d' deletes 8 through 11. The semicolon rebases onto 5 so
+  -- '+3' is 8, the comma keeps that base so '+6' is 11, and the last two
+  -- addresses win.
+  local observed = probe_cmdline ":5;+3,+6d"
+  assert_range(observed, 8, 11, "':5;+3,+6d'")
+end
 
 function Tests.range_peek_resolves_relative_endpoints()
   configure()

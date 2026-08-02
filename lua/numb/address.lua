@@ -16,6 +16,12 @@ local address = {}
 ---Marks and search patterns are deliberately absent; those are left to Vim.
 address.PATTERN = "[%+%-%d%.%$]+"
 
+---Ex separators between addresses. The only difference between them is that `;`
+---moves the line that following offsets count from onto the address before it,
+---while `,` leaves it on the cursor line (see |:;|). Measured against Vim:
+---`:5;+3d` deletes 5 through 8, `:5,+3d` from line 20 deletes 5 through 23.
+local SEPARATORS = { [","] = true, [";"] = true }
+
 ---Parse a single Ex address with arithmetic support.
 ---@param str string The expression (`"+5"`, `"10-3"`, `"++"`, `"$-3"`, `".+5"`)
 ---@param base_line integer The line a relative offset counts from
@@ -79,6 +85,38 @@ function address.parse(str, base_line, last_line)
   return math.floor(result)
 end
 
+---Split the leading address chain off a command line.
+---@param cmd_line string Command line without its leading colon
+---@return string[] addresses In the order they were written
+---@return string[] separators The separator that followed each address
+---@return string rest Whatever follows the chain
+local function split_chain(cmd_line)
+  local addresses, separators = {}, {}
+  local pos = 1
+
+  while true do
+    local from, to = cmd_line:find("^" .. address.PATTERN, pos)
+    if not from then
+      break
+    end
+    addresses[#addresses + 1] = cmd_line:sub(from, to)
+    pos = to + 1
+
+    -- Consume a separator only when another address follows it. Otherwise `:5,`
+    -- would look like a one-address chain with nothing left over, and
+    -- `number_only` could no longer tell it apart from a bare `:5`.
+    local separator = cmd_line:sub(pos, pos)
+    if SEPARATORS[separator] and cmd_line:find("^" .. address.PATTERN, pos + 1) then
+      separators[#separators + 1] = separator
+      pos = pos + 1
+    else
+      break
+    end
+  end
+
+  return addresses, separators, cmd_line:sub(pos)
+end
+
 ---Resolve what a command line should preview.
 ---@param cmd_line string The command line without its leading colon, exactly as
 ---`vim.fn.getcmdline()` returns it
@@ -87,31 +125,40 @@ end
 ---@param number_only boolean Preview only when nothing follows the addresses
 ---@return NumbTarget|nil
 function address.resolve(cmd_line, base_line, last_line, number_only)
-  -- With `number_only` the addresses have to be the whole command line, so the
-  -- patterns are anchored at both ends.
-  local anchor = number_only and "$" or ""
+  local addresses, separators, rest = split_chain(cmd_line)
+  if #addresses == 0 then
+    return nil
+  end
+  if number_only and rest ~= "" then
+    return nil
+  end
 
-  -- Ranges are tried first. The single address pattern below would otherwise
-  -- match only the first address of `:5,10d` and preview line 5 alone, which
-  -- looks like a confirmation of the range while showing none of it.
-  local first_str, last_str = cmd_line:match("^(" .. address.PATTERN .. "),(" .. address.PATTERN .. ")" .. anchor)
-  if first_str then
-    local first = address.parse(first_str, base_line, last_line)
-    local last = address.parse(last_str, base_line, last_line)
-    if first and last then
-      return { line = math.min(first, last), first = first, last = last }
+  -- Resolve left to right, because a `;` changes the base for everything after
+  -- it. Measured: `:5;+3,+6d` deletes 8 through 11, so the base moves to 5 and
+  -- stays there across the following comma.
+  local resolved = {}
+  local base = base_line
+  for index, expression in ipairs(addresses) do
+    local line = address.parse(expression, base, last_line)
+    if not line then
+      return nil
+    end
+    resolved[index] = line
+    if separators[index] == ";" then
+      base = line
     end
   end
 
-  local num_str = cmd_line:match("^(" .. address.PATTERN .. ")" .. anchor)
-  if num_str then
-    local line = address.parse(num_str, base_line, last_line)
-    if line then
-      return { line = line }
-    end
+  if #resolved == 1 then
+    return { line = resolved[1] }
   end
 
-  return nil
+  -- Ex acts on the last two addresses when more than two are given, so
+  -- `:5,10,15d` deletes 10 through 15 and previewing 5 through 10 would mark
+  -- the wrong lines with full confidence.
+  local first = resolved[#resolved - 1]
+  local last = resolved[#resolved]
+  return { line = math.min(first, last), first = first, last = last }
 end
 
 return address

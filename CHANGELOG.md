@@ -16,7 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cursor, while `:y` does not move it and `:m`, `:t` and `:s` finish near their
   destination. Reversed bounds
   are accepted, endpoints may use `.`, `$` and arithmetic (`:.,+5`, `:30,$`),
-  and mark or search ranges are left to Vim untouched. Controlled by the new
+  and mark or search ranges are left to Vim untouched. Both Ex separators work:
+  `,` counts an offset from the cursor and `;` counts it from the address before
+  it, so `:5;+3` is 5 through 8. When more than two addresses are given, Ex acts
+  on the last two, so `:5,10,15d` highlights 10 through 15 rather than the lines
+  that survive. Controlled by the new
   `range_peek` option, on by default; the highlight group is `NumbRange`, linked
   to `Visual` unless you define your own. The highlight belongs to the buffer,
   so it appears in every split showing that buffer, while the cursor and the

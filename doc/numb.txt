@@ -204,6 +204,12 @@ range_peek                                                   *numb-range_peek*
                 searches, `:'a,'b` and `:/pat/,/pat/`, are left to Vim and are
                 not highlighted.
 
+                Both Ex separators are understood. `,` counts an offset from
+                the cursor, while `;` counts it from the address before it, so
+                `:5;+3` is 5 through 8 where `:5,+3` from line 20 is 5 through
+                23. When more than two addresses are given, Ex acts on the
+                last two, so `:5,10,15d` highlights 10 through 15.
+
                 The highlight belongs to the buffer, not to the window, so it
                 shows up in every split displaying that buffer. The rest of
                 the peek stays per window; see |numb-intro|.
