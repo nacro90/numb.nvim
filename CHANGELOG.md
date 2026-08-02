@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-02
+
 ### Added
 - Range preview. Typing `:N,M{cmd}` now highlights the whole line range, so a
   destructive command such as `:50,80d` can be checked before it runs. Neovim
@@ -159,6 +161,7 @@ years of iterative improvements.
 - Replaced the previous `load()`-based arithmetic evaluator with a manual
   parser to eliminate code-execution risk from malformed input.
 
-[Unreleased]: https://github.com/nacro90/numb.nvim/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/nacro90/numb.nvim/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/nacro90/numb.nvim/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/nacro90/numb.nvim/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/nacro90/numb.nvim/releases/tag/v1.0.0

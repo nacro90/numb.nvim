@@ -13,24 +13,7 @@ Items are grouped by priority (P1 highest). Status icons:
 
 ---
 
-## Open decision for the next release
-
-Two functions were removed from the public module in the unreleased work:
-`numb.on_cmdline_changed()` and `numb.on_cmdline_exit()`. Both were autocommand
-callbacks that the help file described as having no reason to be called, and
-both are now local. Nothing in the plugin or its tests used them from outside.
-
-Under strict SemVer, removing anything from the public surface is a major bump,
-which would make the next release `2.0.0` rather than `1.2.0`. The practical
-risk is close to zero: calling either function directly does nothing useful, and
-the version they were introduced in never advertised them as an integration
-point. Decide this deliberately at tagging time rather than by default. Keeping
-`1.2.0` means accepting a documented, deliberate exception; the alternative is
-`2.0.0` for a change no user will notice.
-
----
-
-## Next: Toward v1.2.0
+## Shipped in v1.2.0
 
 Everything planned for this release has landed. `CHANGELOG.md` has the details;
 this is the record of what each item turned out to be.
@@ -80,6 +63,21 @@ deferred, or dropped after discussion.
 ## Done
 
 See [CHANGELOG.md](CHANGELOG.md) for shipped features.
+
+### v1.2.0 (2026-08-02)
+
+- Range preview for `:N,M{cmd}`, address chains and both Ex separators.
+- `:h numb`, pinned to the Lua sources by a CI gate.
+- `:checkhealth numb`.
+- `disable_for_buftype` and `disable_for_filetype`.
+- `get_config()`, a load guard with an opt-out, and configuration validation.
+- Four peek defects fixed, including a buffer-shrinking command that raised out
+  of a scheduled callback and a peek left behind by a window closing.
+- `numb.on_cmdline_changed()` and `numb.on_cmdline_exit()` removed from the
+  public module. Deliberately released as a minor rather than a major: both were
+  documented as having no reason to be called and were never an integration
+  point, while a major bump would silently stop updates for anyone pinned to
+  `1.x`.
 
 ### v1.1.0 (2026-05-25)
 
