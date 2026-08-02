@@ -74,7 +74,7 @@ fi
 if [ "$run_format" -eq 1 ]; then
   echo "==> Formatting"
   if ! command -v stylua >/dev/null 2>&1; then
-    echo "stylua not found. Install it (https://github.com/JohnnyMorganz/StyLua) to run formatting checks."
+    echo "stylua not found. Run scripts/tools.sh to fetch the pinned version into .tools/."
     exit 1
   fi
   stylua --check "${LUA_PATHS[@]}"
@@ -83,7 +83,7 @@ fi
 if [ "$run_lint" -eq 1 ]; then
   echo "==> Lint"
   if ! command -v selene >/dev/null 2>&1; then
-    echo "selene not found. Install it (https://github.com/Kampfkarren/selene) to run lint checks."
+    echo "selene not found. Run scripts/tools.sh to fetch the pinned version into .tools/."
     exit 1
   fi
   selene "${LUA_PATHS[@]}"

@@ -12,16 +12,24 @@ This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md).
 Requirements:
 
 - **Neovim** 0.10 or newer
-- **Stylua** for formatting ([install instructions](https://github.com/JohnnyMorganz/StyLua))
+- **Stylua** and **selene**, fetched at the versions CI pins by
+  `scripts/tools.sh`
 - A POSIX shell to run `scripts/check.sh`
 
-Clone and verify the local environment:
+Clone, fetch the tools, and verify the local environment:
 
 ```bash
 git clone https://github.com/nacro90/numb.nvim.git
 cd numb.nvim
+./scripts/tools.sh                    # downloads stylua and selene into .tools/
+export PATH="$PWD/.tools:$PATH"
 ./scripts/check.sh
 ```
+
+Do not skip the tools. Without them `check.sh` refuses to run the formatting and
+lint stages, and formatting drift or an undefined variable will only surface as a
+red build after you push. Both are single binaries with no Lua of their own, so
+there is nothing to vendor; `scripts/tools.sh` pins the same versions CI installs.
 
 `scripts/check.sh` runs the formatter check, a load smoke test, and the
 regression suite. CI runs the same script on every push and pull request to
@@ -108,7 +116,8 @@ state isolation, and fold behavior.
   with underscores.
 - Public API and internal state should carry LuaCATS type annotations.
 
-Run `stylua lua/numb` before committing. CI rejects unformatted code.
+Run `./scripts/check.sh format lint` before committing. CI rejects unformatted
+code and any lint error.
 
 ## Design Principles
 

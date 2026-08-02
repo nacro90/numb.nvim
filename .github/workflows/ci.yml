@@ -15,28 +15,14 @@ jobs:
   lint:
     name: Format and lint
     runs-on: ubuntu-latest
-    env:
-      STYLUA_VERSION: "0.20.0"
-      SELENE_VERSION: "0.31.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Stylua
-        run: |
-          curl -fsSL -o stylua.zip \
-            "https://github.com/JohnnyMorganz/StyLua/releases/download/v${STYLUA_VERSION}/stylua-linux-x86_64.zip"
-          unzip -q stylua.zip stylua
-          sudo install -m 0755 stylua /usr/local/bin/stylua
-          stylua --version
-
-      - name: Install selene
-        run: |
-          curl -fsSL -o selene.zip \
-            "https://github.com/Kampfkarren/selene/releases/download/${SELENE_VERSION}/selene-light-${SELENE_VERSION}-linux.zip"
-          unzip -q selene.zip selene
-          sudo install -m 0755 selene /usr/local/bin/selene
-          selene --version
+      # The pinned versions live in scripts/tools.sh, so a bump is one edit and
+      # a contributor gets exactly what CI enforces.
+      - name: Install stylua and selene
+        run: sudo ./scripts/tools.sh /usr/local/bin
 
       - name: Run formatting and lint checks
         run: ./scripts/check.sh format lint
