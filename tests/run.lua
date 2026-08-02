@@ -19,6 +19,16 @@ local function run_cmd(cmd)
   wait_until_idle()
 end
 
+-- Give queued vim.schedule callbacks a chance to run. The confirmed jump is
+-- applied from one, so anything that asserts where the cursor ended up has to
+-- wait for it. There is nothing to poll for: the point is to yield, not to reach
+-- a condition, which is why the predicate never succeeds.
+local function drain_scheduled(ms)
+  vim.wait(ms or 100, function()
+    return false
+  end, 10, false)
+end
+
 local function reset_buffer()
   vim.cmd "enew!"
   local lines = {}
@@ -254,9 +264,7 @@ function Tests.state_peek_cursor_cleared_after_jump()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   run_cmd ":15\r"
   -- Wait for scheduled callback to complete
-  vim.wait(100, function()
-    return false
-  end, 10, false)
+  drain_scheduled()
   local state = numb._state
   assert(state.peek_cursor == nil, "peek_cursor should be nil after confirmed jump")
 end
@@ -345,9 +353,7 @@ function Tests.peeking_flag_cleared_after_confirm()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   local win = vim.api.nvim_get_current_win()
   run_cmd ":15\r"
-  vim.wait(100, function()
-    return false
-  end, 10, false)
+  drain_scheduled()
   assert(vim.w[win].numb_peeking == nil, "flag must be cleared after confirmed jump")
   assert(numb.is_peeking(win) == false, "is_peeking false after confirm")
 end
@@ -375,9 +381,7 @@ function Tests.peeking_flag_window_scoped_not_buffer_scoped()
 
   -- Trigger peek only in win2 (current).
   run_cmd ":20\r"
-  vim.wait(100, function()
-    return false
-  end, 10, false)
+  drain_scheduled()
 
   -- Both flags must be cleared post-confirm; importantly, win1 must NEVER have
   -- been flagged while peeking in win2 (buffer-local flag would have leaked).
@@ -517,9 +521,7 @@ function Tests.user_command_disable_then_jump_no_state_leak()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   run_cmd ":5\r"
   -- Now peek is confirmed; state.win_states should be empty after schedule callback
-  vim.wait(100, function()
-    return false
-  end, 10, false)
+  drain_scheduled()
   vim.cmd "Numb disable"
   assert(vim.tbl_isempty(numb._state.win_states), "win_states empty after disable")
   assert(numb._state.peek_cursor == nil, "peek_cursor nil after disable")
@@ -535,16 +537,12 @@ function Tests.jumplist_ctrl_o_returns_to_origin()
   configure()
   reset_buffer()
   -- Drain any pending scheduled callbacks from earlier tests before clearing jumps.
-  vim.wait(50, function()
-    return false
-  end, 10, false)
+  drain_scheduled(50)
   vim.cmd "clearjumps"
   vim.api.nvim_win_set_cursor(0, { 5, 0 })
   run_cmd ":20\r"
   -- Wait for scheduled callback to apply final cursor + jumplist push
-  vim.wait(100, function()
-    return false
-  end, 10, false)
+  drain_scheduled()
   assert_cursor(20, "jumped to 20")
   local jumps = vim.fn.getjumplist()[1]
   assert(#jumps > 0, "jumplist must have at least one entry after confirmed peek")
@@ -559,9 +557,7 @@ end
 function Tests.jumplist_aborted_peek_no_entry()
   configure()
   reset_buffer()
-  vim.wait(50, function()
-    return false
-  end, 10, false)
+  drain_scheduled(50)
   vim.cmd "clearjumps"
   vim.api.nvim_win_set_cursor(0, { 5, 0 })
   run_cmd ":20<C-c>"
@@ -1529,9 +1525,7 @@ function Tests.range_peek_clears_the_highlight_on_confirm()
   -- passing when the highlight is never drawn at all.
   local observed = confirm_cmdline ":5,10y"
   assert_range(observed, 5, 10, "while typing")
-  vim.wait(200, function()
-    return false
-  end, 10, false)
+  drain_scheduled(200)
   assert(highlighted_range(0) == nil, "the highlight must be gone once the command has run")
 end
 
