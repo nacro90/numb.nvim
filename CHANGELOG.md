@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whether it is set up, and the active configuration so a pasted health report
   is self-contained. Being disabled on purpose is reported as a warning, not an
   error.
+- `disable_for_buftype` and `disable_for_filetype`, lists of `buftype` and
+  `filetype` values to leave alone. A window showing one of them is never peeked
+  in, which is what you want for buffers a plugin owns. Both default to empty,
+  terminal buffers included: Vim performs `:15` in a terminal buffer exactly as
+  it does anywhere else, so excluding one means accepting a jump that happens
+  with nothing shown before it. Invalid values are reported like any other
+  option, including a list that holds something other than strings.
 - A load guard and a way to opt out of loading. numb.nvim sets `vim.g.loaded_numb`
   when it loads and returns early when it is already set, so sourcing
   `plugin/numb.lua` again no longer calls `setup()` with no arguments and resets

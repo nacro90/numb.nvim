@@ -286,6 +286,28 @@ local function unpeek(winnr, stay)
   end
 end
 
+---Whether peeking is switched off for what this window is showing.
+---@param winnr integer Window handle
+---@return boolean
+local function is_disabled_for(winnr)
+  local by_buftype = state.opts.disable_for_buftype
+  local by_filetype = state.opts.disable_for_filetype
+
+  -- The default is two empty lists, so reading two buffer options on every
+  -- keystroke would be pure cost with nothing to compare them against.
+  if #by_buftype == 0 and #by_filetype == 0 then
+    return false
+  end
+
+  local bufnr = api.nvim_win_get_buf(winnr)
+  -- 'buftype' first: it is a short fixed set, and the buffers people want left
+  -- alone are usually identified by it.
+  if vim.tbl_contains(by_buftype, api.nvim_get_option_value("buftype", { buf = bufnr })) then
+    return true
+  end
+  return vim.tbl_contains(by_filetype, api.nvim_get_option_value("filetype", { buf = bufnr }))
+end
+
 ---Check if window is currently peeking
 ---@param winnr integer Window handle
 ---@return boolean
@@ -303,6 +325,13 @@ end
 ---Handle command line changes during Ex command input
 local function on_cmdline_changed()
   local winnr = api.nvim_get_current_win()
+
+  -- Nothing was peeked in an excluded buffer, so there is nothing to tear down
+  -- either and the teardown on `CmdlineLeave`, which walks the saved state, has
+  -- no entry to find.
+  if is_disabled_for(winnr) then
+    return
+  end
 
   -- While a peek is already running the cursor sits on the previewed line, so
   -- relative offsets have to count from the saved origin instead. Otherwise

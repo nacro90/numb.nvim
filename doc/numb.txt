@@ -140,6 +140,8 @@ Defaults: >lua
       number_only = false,
       centered_peeking = true,
       range_peek = true,
+      disable_for_buftype = {},
+      disable_for_filetype = {},
     }
 <
 ------------------------------------------------------------------------------
@@ -219,6 +221,38 @@ range_peek                                                   *numb-range_peek*
                 default. Override it before or after `setup()`: >lua
                     vim.api.nvim_set_hl(0, "NumbRange", { bg = "#3a3a50" })
 <
+------------------------------------------------------------------------------
+disable_for_buftype                                 *numb-disable_for_buftype*
+                Type: `string[]`, default: `{}`
+
+                'buftype' values to leave alone. A window whose buffer has one
+                of these types is never peeked in: >lua
+                    require('numb').setup {
+                      disable_for_buftype = { "terminal", "quickfix" },
+                    }
+<
+                Nothing is excluded by default, terminal buffers included.
+                Vim performs `:15` in a terminal buffer exactly as it does
+                anywhere else, so excluding one means accepting a jump that
+                happens with nothing shown before it. Exclude a type when that
+                trade is the one you want, not by habit.
+
+                Compared against the whole value, so `""`, the 'buftype' of an
+                ordinary file buffer, can be listed as well.
+
+------------------------------------------------------------------------------
+disable_for_filetype                               *numb-disable_for_filetype*
+                Type: `string[]`, default: `{}`
+
+                'filetype' values to leave alone, for buffers a plugin owns
+                that carry no distinctive 'buftype': >lua
+                    require('numb').setup {
+                      disable_for_filetype = { "fugitive", "NvimTree" },
+                    }
+<
+                Checked after |numb-disable_for_buftype|, and the same trade
+                applies: the jump still happens, only the preview goes away.
+
 ==============================================================================
 7. Lua API                                                          *numb-api*
 

@@ -189,6 +189,20 @@ require('numb').setup{
   number_only = false, -- Peek only when the command is only a number instead of when it starts with a number
   centered_peeking = true, -- Peeked line will be centered relative to window
   range_peek = true, -- Highlight the whole line range while typing `:N,M{cmd}`
+  disable_for_buftype = {}, -- 'buftype' values to leave alone, e.g. { 'terminal' }
+  disable_for_filetype = {}, -- 'filetype' values to leave alone, e.g. { 'fugitive' }
+}
+```
+
+Nothing is excluded by default, terminal buffers included: Vim performs `:15` in
+a terminal buffer exactly as it does anywhere else, so excluding one means
+accepting a jump that happens with nothing shown before it. Exclude a type when
+that is the trade you want:
+
+```lua
+require('numb').setup {
+  disable_for_buftype = { 'terminal', 'quickfix' },
+  disable_for_filetype = { 'fugitive' },
 }
 ```
 

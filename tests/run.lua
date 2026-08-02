@@ -1043,6 +1043,23 @@ local SANITIZE_CASES = {
     kept = {},
     warnings = 2,
   },
+  -- The list options need more than a type check: `type({}) == type({ 1 })`, so
+  -- comparing types alone would accept a list of numbers or a keyed table.
+  {
+    label = "an empty list option",
+    input = { disable_for_filetype = {} },
+    kept = { disable_for_filetype = {} },
+    warnings = 0,
+  },
+  {
+    label = "a list of filetypes",
+    input = { disable_for_filetype = { "fugitive", "help" } },
+    kept = { disable_for_filetype = { "fugitive", "help" } },
+    warnings = 0,
+  },
+  { label = "a list of numbers", input = { disable_for_buftype = { 1, 2 } }, kept = {}, warnings = 1 },
+  { label = "a keyed table", input = { disable_for_buftype = { terminal = true } }, kept = {}, warnings = 1 },
+  { label = "a string where a list belongs", input = { disable_for_buftype = "terminal" }, kept = {}, warnings = 1 },
 }
 
 function Tests.config_sanitize_states_every_rule()
@@ -1234,6 +1251,73 @@ function Tests.address_non_address_command_does_not_preview()
   local observed = probe_cmdline ":help numb"
   assert(not observed.peeking, "a command that is not an address must not peek")
   assert_cursor(5, "cursor untouched by a non-address command")
+end
+
+-------------------------------------------------------------------------------
+-- DISABLE FILTER TESTS
+-------------------------------------------------------------------------------
+
+function Tests.disable_filter_skips_an_excluded_buftype()
+  configure { disable_for_buftype = { "nofile" } }
+  reset_buffer()
+  vim.bo.buftype = "nofile"
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":15"
+  assert(not observed.peeking, "an excluded buftype must not peek")
+  assert_cursor(1, "the cursor stays put in an excluded buffer")
+end
+
+function Tests.disable_filter_skips_an_excluded_filetype()
+  configure { disable_for_filetype = { "fugitive" } }
+  reset_buffer()
+  vim.bo.filetype = "fugitive"
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":15"
+  assert(not observed.peeking, "an excluded filetype must not peek")
+  assert_cursor(1, "the cursor stays put in an excluded buffer")
+end
+
+function Tests.disable_filter_is_empty_by_default()
+  local numb = configure()
+  reset_buffer()
+  -- Asserted on the configuration itself, because a buffer can only stand in for
+  -- one buftype at a time and the default that matters is that the lists are
+  -- empty. Excluding `terminal` was considered and measured against: Vim performs
+  -- `:15` in a terminal buffer exactly as it does elsewhere, so excluding it by
+  -- default would leave that jump with no preview.
+  local active = numb.get_config()
+  assert(#active.disable_for_buftype == 0, "no buftype may be excluded out of the box")
+  assert(#active.disable_for_filetype == 0, "no filetype may be excluded out of the box")
+  vim.bo.buftype = "nofile"
+  vim.bo.filetype = "help"
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":15"
+  assert(observed.peeking, "with empty lists every buffer must still peek")
+  assert(observed.line == 15, ("line 15 must be previewed, got %d"):format(observed.line))
+end
+
+function Tests.disable_filter_matches_only_the_listed_names()
+  configure { disable_for_buftype = { "terminal" }, disable_for_filetype = { "fugitive" } }
+  reset_buffer()
+  vim.bo.buftype = "nofile"
+  vim.bo.filetype = "lua"
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":15"
+  assert(observed.peeking, "a buffer matching neither list must peek as usual")
+  assert(observed.line == 15, ("line 15 must be previewed, got %d"):format(observed.line))
+end
+
+function Tests.disable_filter_leaves_no_state_behind()
+  local numb = configure { disable_for_buftype = { "nofile" } }
+  reset_buffer()
+  vim.bo.buftype = "nofile"
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  -- Confirmed rather than aborted: a guard that returns before saving state must
+  -- also leave the teardown on CmdlineLeave with nothing to restore.
+  run_cmd ":15\r"
+  drain_scheduled()
+  assert(vim.tbl_isempty(numb._state.win_states), "a skipped buffer must not leave saved state")
+  assert(numb._state.peek_cursor == nil, "and must not leave a pending target")
 end
 
 -------------------------------------------------------------------------------

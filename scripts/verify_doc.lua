@@ -106,17 +106,33 @@ for _, line in ipairs(vim.fn.readfile(DOC)) do
   end
 end
 
+-- Rendered the way the help file writes them, so an empty list reads as `{}`
+-- rather than as a table address.
+local function render_default(value)
+  if type(value) ~= "table" then
+    return tostring(value)
+  end
+  if #value == 0 then
+    return "{}"
+  end
+  local items = {}
+  for index, item in ipairs(value) do
+    items[index] = ('"%s"'):format(item)
+  end
+  return "{ " .. table.concat(items, ", ") .. " }"
+end
+
 for option, default in pairs(numb.get_config()) do
   local documented = documented_defaults[option]
   if not documented then
     fail(("%s: the Defaults block does not list %s"):format(DOC, option))
-  elseif documented ~= tostring(default) then
+  elseif documented ~= render_default(default) then
     fail(
       ("%s: the Defaults block says %s = %s, the module defaults to %s"):format(
         DOC,
         option,
         documented,
-        tostring(default)
+        render_default(default)
       )
     )
   end
