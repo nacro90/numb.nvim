@@ -19,8 +19,10 @@ stylua lua plugin tests scripts
 # Lint (same scope; selene.toml plus the vendored vim.yml standard library)
 selene lua plugin tests scripts
 
-# Verify plugin loads
-nvim --headless +"lua require('numb').setup()" +qall
+# Verify the plugin loads from plugin/numb.lua and configures itself.
+# Not `nvim --headless +"lua require('numb').setup()" +qall`: the repository is
+# not on the runtimepath there, and +qall exits 0 even after the error.
+nvim -l scripts/verify_load.lua
 
 # Run headless tests directly
 nvim --headless -u tests/init.lua -i NONE -n +"lua require('tests.run').run()" +qall
@@ -32,7 +34,22 @@ nvim --headless -u tests/init.lua -i NONE -n +"lua require('tests.run').run()" +
 
 ## Project Structure
 
-Code lives under `lua/numb/`; `init.lua` exposes the user-facing API. The Stylua config (`stylua.toml`) sits at the repo root so the formatter can be run from anywhere. Headless regression tests live in `tests/` (`tests/init.lua` wires Neovim, `tests/run.lua` defines scenarios). Demo media is hosted externally, and the runtime expectations users rely on are captured in `README.md`.
+Code lives under `lua/numb/`. `init.lua` exposes the user-facing API and owns
+everything that touches editor state; `address.lua` and `config.lua` are pure and
+own Ex address resolution and option validation; `health.lua` backs
+`:checkhealth numb`. The two pure modules exist so their rules can be tested by
+calling one function, which is why the suite covers them with tables of cases
+rather than command line round trips.
+
+`scripts/` holds the gates: `check.sh` drives everything, and `verify_doc.lua`,
+`verify_health.lua` and `verify_load.lua` are the checks that need a running
+Neovim. Workflows call `check.sh` stages rather than carrying their own logic.
+
+The Stylua config (`stylua.toml`) sits at the repo root so the formatter can be
+run from anywhere. Headless regression tests live in `tests/` (`tests/init.lua`
+wires Neovim, `tests/run.lua` defines scenarios). Demo media is hosted
+externally, and the runtime expectations users rely on are captured in
+`README.md`.
 
 ## Architecture
 
@@ -40,11 +57,11 @@ numb.nvim peeks buffer lines when typing `:{number}` in command mode without jum
 
 ### Core Flow (`lua/numb/init.lua`)
 
-1. **setup()** registers `CmdlineChanged` and `CmdlineLeave` autocommands in the "numb" augroup
-2. **on_cmdline_changed()** parses the command line for number patterns (absolute like `:15` or relative like `:+5`), then calls `peek()` to temporarily move the cursor
-3. **peek()** saves window state (cursor, options, topline) in `win_states[winnr]`, applies peeking options (number, cursorline, foldenable=false), and moves cursor to target line
-4. **on_cmdline_exit()** checks `event.abort` to determine stay vs restore, then calls `unpeek()`
-5. **unpeek()** restores original window options and cursor; if staying, keeps the new position and runs `zv` to unfold
+1. **setup()** installs the `CmdlineChanged`, `CmdlineLeave`, `ColorScheme` and `WinClosed` autocommands in the "numb" augroup and defines the `NumbRange` highlight
+2. **on_cmdline_changed()** hands the command line to `numb.address`, then dispatches on the result: nothing, a single line, or a line plus the range around it. Local, wired straight into the autocommand
+3. **peek()** saves window state (buffer, cursor, options, topline) in `win_states[winnr]`, applies peeking options (number, cursorline, foldenable=false), and moves the cursor to the target line. A range also gets one extmark spanning it
+4. **on_cmdline_exit()** reads `event.abort` for stay vs restore, then unpeeks *every* window with saved state, not only the current one: a window closed during the command line emits no `WinClosed`, and focus has already moved off it
+5. **unpeek()** restores the original window options and cursor and clears the range through the buffer it was drawn on; if staying, a scheduled callback re-clamps the target against the buffer as the command left it, pushes the jumplist entry and unfolds
 
 ### State Management
 
@@ -52,12 +69,19 @@ numb.nvim peeks buffer lines when typing `:{number}` in command mode without jum
 - `peek_cursor`: tracks target position for when user confirms the jump
 - `opts`: module-level config merged from defaults + user options
 
-### Number Parsing
+### Address Resolution (`lua/numb/address.lua`)
 
-`parse_num_str()` handles Ex command math expressions:
+`address.resolve()` takes the command line as `getcmdline()` gives it, the line
+relative offsets count from, and the last line of the buffer:
 - Absolute: `:15` → line 15
 - Relative: `:+5` → current + 5, `:-3` → current - 3
 - Chained: `:++` → current + 2 (inserts `1` between signs)
+- Symbols: `:$` → last line, `:.` → current line, with arithmetic on either
+- Ranges: `,` counts offsets from the cursor, `;` from the address before it,
+  and when more than two addresses are given Ex acts on the last two, so
+  `:5,10,15d` resolves to 10..15
+- Marks and search patterns are deliberately not handled; those fall through to
+  Vim with no preview
 
 ## Testing
 
