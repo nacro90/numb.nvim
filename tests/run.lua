@@ -1720,6 +1720,18 @@ local function clear_modified_buffers()
   end
 end
 
+-- Put the editor back to one window on a clean buffer after every test. Isolation
+-- otherwise rests entirely on the next test calling configure() first, and a test
+-- that fails halfway leaves a split open or a buffer dirty, so the failure that
+-- gets reported is a cascade of later tests rather than the one that broke.
+-- Everything is wrapped, because a teardown that raises would mask the real
+-- failure it is cleaning up after.
+local function reset_environment()
+  clear_modified_buffers()
+  pcall(vim.cmd, "silent! only")
+  pcall(vim.cmd, "silent! enew!")
+end
+
 -- Run tests in sorted order for deterministic execution
 function M.run()
   local names = {}
@@ -1734,6 +1746,7 @@ function M.run()
   for _, name in ipairs(names) do
     local fn = Tests[name]
     local ok, err = pcall(fn)
+    reset_environment()
     if ok then
       vim.api.nvim_echo({ { ("[numb test] %s passed"):format(name), "None" } }, false, {})
     else
