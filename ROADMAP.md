@@ -32,62 +32,25 @@ point. Decide this deliberately at tagging time rather than by default. Keeping
 
 ## Next: Toward v1.2.0
 
-### P1: Range peek 🚧
+Everything planned for this release has landed. `CHANGELOG.md` has the details;
+this is the record of what each item turned out to be.
 
-Highlight the line range when typing `:N,M{cmd}` so the user can verify
-the range before pressing Enter. Vim natively previews substitute via
-`inccommand` but not delete/yank/move/global; numb.nvim already previews
-single-line `:N` jumps, and this extends the same principle to ranges.
-
-**Scope (MVP):**
-- Numeric ranges: `:5,10`, `:.,+5`, `:10,+3`, `:-5,+10`.
-- Extmark-based line highlight using a new `NumbRange` highlight
-  (`link = "Visual"` by default).
-- New option `range_peek = true` (default on).
-- Falls back to single-line peek if the cmdline does not match a range.
-- Unsupported syntaxes (`'a`, `/pat/`, `$`, `%`) pass through to native
-  Vim unhighlighted, so there is no regression.
-
-**Why P1:** Addresses a real UX gap with no native Neovim equivalent.
-Natural extension of the plugin's "peek before commit" philosophy.
-
-### P2: `:checkhealth numb` 🚧
-
-Health check reporting the running Neovim version, augroup state, and
-config validity, so a bug report can start from `:checkhealth numb`
-output instead of a guess. Aligns with neovim-lua-plugin best practices.
-
-**Why P2:** Cheap to write, and it makes every future issue easier to
-triage.
-
-### P3: Filetype/buftype disable filter 🚧
-
-Two new options:
-
-```lua
-require("numb").setup{
-  disable_for_buftype = { "terminal" },  -- default
-  disable_for_filetype = {},             -- opt-in
-}
-```
-
-Early-return guard in `on_cmdline_changed` skips peek when the current
-window matches. Default excludes `terminal` since `:N` is rarely
-meaningful there.
-
-**Why P3:** Removes a real but narrow pain point (terminal flicker).
-Tiny change, opt-in for filetypes, conservative default for buftypes.
-
-### P4: Vimdoc `:h numb` 🚧
-
-Generate `doc/numb.txt` from the LuaCATS annotations via vimCATS or
-panvimdoc, so the options and the Lua API are readable without leaving
-Neovim.
-
-**Why P4:** Expected of a mature plugin, but it documents behavior the
-other items in this release are still changing, so it lands last.
-
----
+- **Range peek (P1) ✅** Shipped with more than the MVP scope: both Ex
+  separators, address chains where the last two win, and `$` and `.` endpoints.
+- **`:checkhealth numb` (P2) ✅** Shipped, and CI now exercises the real
+  `vim.health` API rather than only the suite's stub.
+- **Filetype/buftype disable filter (P3) ✅** Shipped with both lists defaulting
+  to empty rather than excluding `terminal`. The proposed default was measured
+  and dropped: in a terminal buffer numb previews `:15` correctly, and with the
+  plugin disabled Vim performs the same jump on its own, so excluding a buftype
+  does not stop the jump, it only takes away the preview. Users who want that
+  trade make it in one line.
+- **Vimdoc `:h numb` (P4) ✅** Hand-written rather than generated. panvimdoc
+  derives tags from markdown headings only, so a generated file carries no
+  `*numb*` tag and no tag per option or per function, which is what makes
+  `:help` useful. Instead the file is pinned to the Lua sources by
+  `scripts/verify_doc.lua`: an option added without a tag, or missing from the
+  Defaults block, or with a stale documented value, fails the build.
 
 ## Future / Under Consideration
 
