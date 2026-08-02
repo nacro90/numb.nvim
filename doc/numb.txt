@@ -134,6 +134,7 @@ Defaults: >lua
       hide_relativenumbers = true,
       number_only = false,
       centered_peeking = true,
+      range_peek = true,
     }
 <
 ------------------------------------------------------------------------------
@@ -177,6 +178,7 @@ centered_peeking                                       *numb-centered_peeking*
                 applies to the confirmed jump, so the line you land on stays
                 where you saw it.
 
+------------------------------------------------------------------------------
 range_peek                                                   *numb-range_peek*
                 Type: `boolean`, default: `true`
 

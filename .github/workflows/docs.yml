@@ -13,9 +13,10 @@ name: Docs
 #
 # Instead of generating, this workflow pins the help file to the Lua sources:
 # every option in the default config and every public function of the module
-# must have a help tag, every |cross reference| must resolve, and the file
-# must stay inside the 78-column help convention. An option added without a
-# doc entry fails here.
+# must have a help tag, every option must also appear in the `Defaults:` block
+# with the value the module actually uses, every |cross reference| must resolve,
+# and the file must stay inside the 78-column help convention. An option added
+# without a doc entry fails here.
 #
 # To reproduce locally, from the repository root:
 #
@@ -133,6 +134,45 @@ jobs:
           for _, tag in ipairs(required) do
             if not ours[tag] then
               fail("doc/numb.txt is missing the help tag *" .. tag .. "*")
+            end
+          end
+
+          -- Carrying a tag is not the same as being listed. The `Defaults:`
+          -- block in the Options section is what a reader treats as the
+          -- canonical list of options and their values, and an option can have
+          -- its own tag while missing from that block entirely. Parse the block
+          -- and require one line per option, with the value the module really
+          -- defaults to, so neither a missing option nor a stale value survives.
+          local documented_defaults = {}
+          local in_defaults_block = false
+          for _, line in ipairs(vim.fn.readfile(DOC)) do
+            if in_defaults_block then
+              if line:match "^<" then
+                in_defaults_block = false
+              else
+                local key, value = line:match "^%s*([%w_]+)%s*=%s*(.-),%s*$"
+                if key then
+                  documented_defaults[key] = value
+                end
+              end
+            elseif line:match "^Defaults: >" then
+              in_defaults_block = true
+            end
+          end
+
+          for option, default in pairs(numb._state.opts) do
+            local documented = documented_defaults[option]
+            if not documented then
+              fail(("%s: the Defaults block does not list %s"):format(DOC, option))
+            elseif documented ~= tostring(default) then
+              fail(
+                ("%s: the Defaults block says %s = %s, the module defaults to %s"):format(
+                  DOC,
+                  option,
+                  documented,
+                  tostring(default)
+                )
+              )
             end
           end
 
