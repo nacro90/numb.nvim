@@ -1053,14 +1053,12 @@ local function highlighted_range(bufnr)
   return { first + 1, last + 1 }
 end
 
--- Observe the peek produced by a real command line. This is the only way to
--- exercise the address parsing path, because `_peek` takes a resolved line
--- number and so bypasses parsing entirely. The observer is registered after
--- numb's own CmdlineChanged handler, so it runs second and sees the result.
--- The command line is aborted with <C-c>, not <Esc>: inside a macro, and
--- feedkeys counts as one, <Esc> executes the command rather than cancelling it
--- (see :h c_<Esc>). So nothing here is ever executed.
-local function probe_cmdline(cmdline)
+-- Observe the peek produced by a real command line, then end it with
+-- `terminator`. This is the only way to exercise the address parsing path,
+-- because `_peek` takes a resolved line number and so bypasses parsing
+-- entirely. The observer is registered after numb's own CmdlineChanged handler,
+-- so it runs second and sees the result.
+local function observe_cmdline(cmdline, terminator)
   local numb = require "numb"
   local observed
   local group = vim.api.nvim_create_augroup("numb_test_probe", { clear = true })
@@ -1076,7 +1074,7 @@ local function probe_cmdline(cmdline)
       }
     end,
   })
-  feedkeys(cmdline .. "<C-c>")
+  feedkeys(cmdline .. terminator)
   wait_until_idle()
   vim.api.nvim_del_augroup_by_id(group)
   assert(observed ~= nil, ("the probe never observed a CmdlineChanged for %q"):format(cmdline))
@@ -1085,6 +1083,21 @@ local function probe_cmdline(cmdline)
     ("the probe observed %q, expected %q"):format(observed.cmdline, cmdline:sub(2))
   )
   return observed
+end
+
+-- Abandon the command line with <C-c>, not <Esc>: inside a macro, and feedkeys
+-- counts as one, <Esc> executes the command rather than cancelling it (see
+-- :h c_<Esc>). So nothing typed through this helper is ever executed.
+local function probe_cmdline(cmdline)
+  return observe_cmdline(cmdline, "<C-c>")
+end
+
+-- The same observation, but the command is confirmed instead of abandoned. Vim
+-- resolves every address this plugin understands on its own, so asserting only
+-- where the cursor ends up after `:$` would hold with numb uninstalled. The
+-- observation is what proves the plugin previewed the target first.
+local function confirm_cmdline(cmdline)
+  return observe_cmdline(cmdline, "\r")
 end
 
 function Tests.address_dollar_previews_the_last_line()
@@ -1133,11 +1146,17 @@ function Tests.address_dollar_is_clamped_to_the_buffer()
 end
 
 function Tests.address_dollar_confirmed_jumps_to_the_last_line()
-  configure()
+  local numb = configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
-  run_cmd ":$\r"
+  local observed = confirm_cmdline ":$"
+  -- Vim performs the ':$' jump itself, so the cursor assertion below holds even
+  -- with the plugin uninstalled. The preview is the part that is numb's, which
+  -- is why it is asserted first.
+  assert(observed.peeking, "':$' must peek while it is being typed")
+  assert(observed.line == 40, ("':$' must preview the last line, got %d"):format(observed.line))
   assert_cursor(40, "confirming ':$' lands on the last line")
+  assert(not numb.is_peeking(), "the peek must be over once the command has run")
 end
 
 function Tests.address_non_address_command_does_not_preview()
@@ -1344,7 +1363,10 @@ function Tests.range_peek_clears_the_highlight_on_confirm()
   configure()
   reset_buffer()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
-  run_cmd ":5,10y\r"
+  -- Asserting that the highlight was there first is what stops this from
+  -- passing when the highlight is never drawn at all.
+  local observed = confirm_cmdline ":5,10y"
+  assert_range(observed, 5, 10, "while typing")
   vim.wait(200, function()
     return false
   end, 10, false)
