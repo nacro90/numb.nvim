@@ -3,6 +3,10 @@
 --- Pure: nothing here reads or writes editor state. The caller supplies the line
 --- that relative offsets count from and the last line of the buffer, which is
 --- what makes every shape testable without a window, a buffer or a command line.
+---
+--- `resolve()` is the only entry point. It splits the command line into an
+--- address chain, hands each address to `parse()`, and decides which of the
+--- resolved lines Ex would really act on.
 local address = {}
 
 ---What the start of a command line resolves to.
@@ -14,7 +18,7 @@ local address = {}
 ---Characters an address this module understands is built from: digits, the
 ---signs of relative offsets, `.` for the current line and `$` for the last one.
 ---Marks and search patterns are deliberately absent; those are left to Vim.
-address.PATTERN = "[%+%-%d%.%$]+"
+local ADDRESS = "[%+%-%d%.%$]+"
 
 ---Ex separators between addresses. The only difference between them is that `;`
 ---moves the line that following offsets count from onto the address before it,
@@ -22,48 +26,38 @@ address.PATTERN = "[%+%-%d%.%$]+"
 ---`:5;+3d` deletes 5 through 8, `:5,+3d` from line 20 deletes 5 through 23.
 local SEPARATORS = { [","] = true, [";"] = true }
 
+---Whether `str` is shaped like an Ex address: one base, `.`, `$` or a number,
+---followed by any number of signed offsets.
+---A second base, or digits after an offset, is not an address at all: Vim
+---rejects `:..`, `:$$`, `:5..10` and `:$-$` with E492. Accepting them meant
+---resolving `..` to the current line written out twice, `2020` from line 20, and
+---previewing a line for a command that was never going to run.
+---@param str string
+---@return boolean
+local function is_address(str)
+  -- No base at all is valid: `:+5` counts from the line the caller gave us.
+  local rest = str:match "^[%.%$](.*)$" or str:match "^%d+(.*)$" or str
+
+  while rest ~= "" do
+    -- Each offset is a sign and an optional count, so `:++` and a trailing `:+`
+    -- stay valid.
+    local tail = rest:match "^[%+%-]%d*(.*)$"
+    if not tail then
+      return false
+    end
+    rest = tail
+  end
+
+  return true
+end
+
 ---Parse a single Ex address with arithmetic support.
 ---@param str string The expression (`"+5"`, `"10-3"`, `"++"`, `"$-3"`, `".+5"`)
 ---@param base_line integer The line a relative offset counts from
 ---@param last_line integer|nil Line count of the buffer, the value of `$`
 ---@return integer|nil Line number, or nil when the expression is not one
----Split an address into its base and check the rest is only signed offsets.
----An Ex address is one base, optionally followed by any number of offsets, so a
----second `.` or `$`, or digits after an offset, is not an address at all: Vim
----rejects `:..`, `:$$`, `:5..10` and `:$-$` with E492. Accepting them meant
----resolving `..` to the current line written out twice, `2020` from line 20, and
----previewing a line for a command that was never going to run.
----@param str string
----@return string|nil base The base, `""` when the address is offsets only
-local function base_of(str)
-  local base, rest = str:match "^([%.%$])(.*)$"
-  if not base then
-    base, rest = str:match "^(%d+)(.*)$"
-  end
-  if not base then
-    -- No base at all is valid: `:+5` counts from the line the caller gave us.
-    base, rest = "", str
-  end
-
-  -- Zero or more offsets, each a sign and an optional count, so `:++` and a
-  -- trailing `:+` stay valid.
-  while rest ~= "" do
-    local _, tail = rest:match "^([%+%-]%d*)(.*)$"
-    if not tail then
-      return nil
-    end
-    rest = tail
-  end
-
-  return base
-end
-
-function address.parse(str, base_line, last_line)
-  if not str:match("^" .. address.PATTERN .. "$") then
-    return nil
-  end
-
-  if not base_of(str) then
+local function parse(str, base_line, last_line)
+  if not str:match("^" .. ADDRESS .. "$") or not is_address(str) then
     return nil
   end
 
@@ -90,32 +84,14 @@ function address.parse(str, base_line, last_line)
     str = str .. 1
   end
 
-  -- A leading `.` or `$` has already become a number above, so only a leading
-  -- sign still needs the base line added.
-  local base = 0
-  if str:find "^[%+%-]" then
-    base = base_line
+  -- What is left is a base number followed by signed offsets, so summing the
+  -- terms is the whole calculation. A leading `.` or `$` has already become a
+  -- number, so only a leading sign still needs the base line added.
+  local result = str:find "^[%+%-]" and base_line or 0
+  for sign, digits in str:gmatch "([%+%-]?)(%d+)" do
+    local count = tonumber(digits)
+    result = result + (sign == "-" and -count or count)
   end
-
-  local result = base
-  local current_num = ""
-  local sign = 1
-
-  for i = 1, #str do
-    local char = str:sub(i, i)
-    if char == "+" then
-      result = result + sign * (tonumber(current_num) or 0)
-      current_num = ""
-      sign = 1
-    elseif char == "-" then
-      result = result + sign * (tonumber(current_num) or 0)
-      current_num = ""
-      sign = -1
-    else
-      current_num = current_num .. char
-    end
-  end
-  result = result + sign * (tonumber(current_num) or 0)
 
   return math.floor(result)
 end
@@ -130,7 +106,7 @@ local function split_chain(cmd_line)
   local pos = 1
 
   while true do
-    local from, to = cmd_line:find("^" .. address.PATTERN, pos)
+    local from, to = cmd_line:find("^" .. ADDRESS, pos)
     if not from then
       break
     end
@@ -141,12 +117,11 @@ local function split_chain(cmd_line)
     -- would look like a one-address chain with nothing left over, and
     -- `number_only` could no longer tell it apart from a bare `:5`.
     local separator = cmd_line:sub(pos, pos)
-    if SEPARATORS[separator] and cmd_line:find("^" .. address.PATTERN, pos + 1) then
-      separators[#separators + 1] = separator
-      pos = pos + 1
-    else
+    if not (SEPARATORS[separator] and cmd_line:find("^" .. ADDRESS, pos + 1)) then
       break
     end
+    separators[#separators + 1] = separator
+    pos = pos + 1
   end
 
   return addresses, separators, cmd_line:sub(pos)
@@ -174,7 +149,7 @@ function address.resolve(cmd_line, base_line, last_line, number_only)
   local resolved = {}
   local base = base_line
   for index, expression in ipairs(addresses) do
-    local line = address.parse(expression, base, last_line)
+    local line = parse(expression, base, last_line)
     if not line then
       return nil
     end

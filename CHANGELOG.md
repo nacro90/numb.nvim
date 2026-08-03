@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `:Numb <Tab>` completes `disable`, `enable` and `toggle` in that order. The
+  candidates used to be returned in table order, which Lua does not specify, so
+  the list could come back differently from one session to the next.
+
 ### Fixed
 - Malformed addresses no longer produce a preview. `:..`, `:$$`, `:.$`, `:5.5`,
   `:5..10` and `:$-$` are all rejected by Vim with `E492`, but each used to be

@@ -1,4 +1,15 @@
 ---@mod numb Core peek logic for :{number} and relative Ex commands.
+---
+--- The whole plugin is three steps: `CmdlineChanged` asks `numb.address` what the
+--- command line points at, `peek()` previews it while saving what it changed, and
+--- `CmdlineLeave` restores that state, staying at the target when the command was
+--- confirmed.
+---
+--- Every keystroke redoes that in full: `on_cmdline_changed` restores the window
+--- first and peeks again from scratch, so `win_states` holds at most one entry
+--- per window and never accumulates across a command line. That is why the
+--- options and view a peek saves are always the ones from before the peek, not
+--- the ones a previous keystroke left behind.
 local numb = {}
 
 local api = vim.api
@@ -7,10 +18,6 @@ local cmd = vim.cmd
 
 local address = require "numb.address"
 local config = require "numb.config"
-
--------------------------------------------------------------------------------
--- Type Definitions
--------------------------------------------------------------------------------
 
 ---@class NumbWinState
 ---@field bufnr integer Buffer the peek was started on, and so the buffer any
@@ -28,9 +35,7 @@ local config = require "numb.config"
 ---@field opts NumbConfig Configuration options
 
 -- One instance is all there can ever be, which is why this is a plain table and
--- not a class with a constructor: `peek_cursor` is shared rather than per-window
--- precisely because at most one window peeks at a time. Exposed for testing as
--- `numb._state`.
+-- not a class with a constructor. Exposed for testing as `numb._state`.
 ---@type NumbState
 local state = {
   win_states = {},
@@ -38,17 +43,7 @@ local state = {
   opts = config.resolve(nil),
 }
 
----Drop the per-peek state, keeping the configuration.
-local function reset_state()
-  state.win_states = {}
-  state.peek_cursor = nil
-end
-
--------------------------------------------------------------------------------
--- Constants
--------------------------------------------------------------------------------
-
----Window options that are saved and restored during peeking.
+---Window options saved and restored around a peek.
 ---`number`, `cursorline` and `relativenumber` are each behind an option, because
 ---whether they help is a matter of taste. `foldenable` is not: it is always
 ---turned off while peeking, since a line inside a closed fold is not on screen at
@@ -69,28 +64,22 @@ local function define_highlight()
 end
 
 -------------------------------------------------------------------------------
--- Internal Functions
+-- Window state
 --
 -- View-affecting calls (`winsaveview`, `winrestview`, `normal! zz`) always act
--- on the *current* window, ignoring any window handle in scope. Every such call
--- below therefore goes through `api.nvim_win_call(winnr, ...)`, so that the
--- `winnr` these functions take is genuinely honored even when the target window
--- is not the current one.
---
--- The confirmed-jump branch of `unpeek` is the one exception: it makes the
--- target window current with `api.nvim_set_current_win` and switches back when
--- it is done, so the bare `normal!` commands there already act on the right
--- window. Read that switch as deliberate rather than as a missing
--- `api.nvim_win_call`.
+-- on the *current* window, ignoring any window handle in scope, so every such
+-- call below goes through `api.nvim_win_call(winnr, ...)`. The one exception is
+-- `schedule_jump`, which makes the target window current on purpose and switches
+-- back afterwards; read that as deliberate rather than as a missing
+-- `nvim_win_call`.
 -------------------------------------------------------------------------------
 
----Clamp line number to valid buffer range
+---Clamp a line number to the buffer.
 ---@param bufnr integer Buffer handle
 ---@param linenr integer Line number to clamp
 ---@return integer
 local function clamp_linenr(bufnr, linenr)
-  local max_line = api.nvim_buf_line_count(bufnr)
-  return math.max(1, math.min(max_line, linenr))
+  return math.max(1, math.min(api.nvim_buf_line_count(bufnr), linenr))
 end
 
 ---Save window state for later restoration.
@@ -98,9 +87,9 @@ end
 ---@return NumbWinState The state just saved, so the caller does not have to read
 ---it back out of `win_states` across calls that can fire autocommands
 local function save_win_state(winnr)
-  local win_options = {}
+  local options = {}
   for _, option in ipairs(TRACKED_WIN_OPTIONS) do
-    win_options[option] = api.nvim_get_option_value(option, { win = winnr, scope = "local" })
+    options[option] = api.nvim_get_option_value(option, { win = winnr, scope = "local" })
   end
   state.win_states[winnr] = {
     -- The buffer is remembered rather than looked up later, because the range
@@ -108,20 +97,17 @@ local function save_win_state(winnr)
     -- something else, by the time it has to be cleared.
     bufnr = api.nvim_win_get_buf(winnr),
     cursor = api.nvim_win_get_cursor(winnr),
-    options = win_options,
+    options = options,
     topline = api.nvim_win_call(winnr, fn.winsaveview).topline,
   }
   return state.win_states[winnr]
 end
 
----Apply window options
 ---@param winnr integer Window handle
----@param options table<string, boolean|nil> Options to set
+---@param options table<string, boolean> Options to set
 local function set_win_options(winnr, options)
   for option, value in pairs(options) do
-    if value ~= nil then
-      api.nvim_set_option_value(option, value, { win = winnr, scope = "local" })
-    end
+    api.nvim_set_option_value(option, value, { win = winnr, scope = "local" })
   end
 end
 
@@ -130,10 +116,9 @@ end
 ---from can be closed while the buffer, and the extmark on it, live on.
 ---@param bufnr integer Buffer handle
 local function clear_range(bufnr)
-  if not api.nvim_buf_is_valid(bufnr) then
-    return
+  if api.nvim_buf_is_valid(bufnr) then
+    api.nvim_buf_clear_namespace(bufnr, RANGE_NS, 0, -1)
   end
-  api.nvim_buf_clear_namespace(bufnr, RANGE_NS, 0, -1)
 end
 
 ---Highlight an inclusive line range in the window's buffer.
@@ -148,7 +133,7 @@ local function highlight_range(winnr, first, last)
   local high = clamp_linenr(bufnr, math.max(first, last))
   local last_text = api.nvim_buf_get_lines(bufnr, high - 1, high, false)[1] or ""
 
-  api.nvim_buf_clear_namespace(bufnr, RANGE_NS, 0, -1)
+  clear_range(bufnr)
   api.nvim_buf_set_extmark(bufnr, RANGE_NS, low - 1, 0, {
     end_row = high - 1,
     end_col = #last_text,
@@ -159,33 +144,39 @@ local function highlight_range(winnr, first, last)
   })
 end
 
----Peek at a line in the window
+-------------------------------------------------------------------------------
+-- Peeking
+-------------------------------------------------------------------------------
+
+---Preview a line in a window, saving whatever the preview changes.
 ---@param winnr integer Window handle
 ---@param linenr integer Target line number
 local function peek(winnr, linenr)
   local bufnr = api.nvim_win_get_buf(winnr)
   linenr = clamp_linenr(bufnr, linenr)
 
-  -- Save window state on first peek. Held in a local because `set_win_options`
-  -- below fires `OptionSet`, so reading it back out of `win_states` afterwards
-  -- would be reading through state a user autocommand could have changed.
+  -- Held in a local because `set_win_options` below fires `OptionSet`, so reading
+  -- it back out of `win_states` afterwards would be reading through state a user
+  -- autocommand could have changed. Through a command line the entry is always
+  -- absent, because `on_cmdline_changed` unpeeks first; an existing one is
+  -- reused for the sake of a direct `numb._peek` call, which the tests make.
   local win_state = state.win_states[winnr] or save_win_state(winnr)
 
-  -- Apply peeking options
-  local peeking_options = {
-    foldenable = false,
-    number = state.opts.show_numbers and true or nil,
-    cursorline = state.opts.show_cursorline and true or nil,
-  }
+  local peeking_options = { foldenable = false }
+  if state.opts.show_numbers then
+    peeking_options.number = true
+  end
+  if state.opts.show_cursorline then
+    peeking_options.cursorline = true
+  end
   if state.opts.hide_relativenumbers then
     peeking_options.relativenumber = false
   end
-
   set_win_options(winnr, peeking_options)
 
-  -- Move cursor to target line, preserving column
-  local original_column = win_state.cursor[2]
-  state.peek_cursor = { linenr, original_column }
+  -- The column comes from the saved cursor, so the preview moves down the buffer
+  -- without drifting sideways.
+  state.peek_cursor = { linenr, win_state.cursor[2] }
   api.nvim_win_set_cursor(winnr, state.peek_cursor)
 
   if state.opts.centered_peeking then
@@ -194,93 +185,95 @@ local function peek(winnr, linenr)
     end)
   end
 
-  -- Expose a window-scoped flag so statusline integrations can render a
-  -- "currently peeking" indicator. Window-scoped (not buffer-scoped) so the
-  -- flag does not leak across split windows sharing the same buffer.
+  -- Window-scoped (not buffer-scoped) so the flag statusline integrations read
+  -- does not leak across splits sharing the same buffer.
   if api.nvim_win_is_valid(winnr) then
     vim.w[winnr].numb_peeking = true
   end
 end
 
----Restore window state after peeking
+---Land on the confirmed target once the Ex command has finished running.
+---Scheduled, because `CmdlineLeave` fires before the command does.
 ---@param winnr integer Window handle
----@param stay boolean If true, keep the new cursor position
-local function unpeek(winnr, stay)
-  local orig_state = state.win_states[winnr]
+---@param origin_cursor integer[] Where the peek started
+---@param target_cursor integer[] Where the peek was pointing
+local function schedule_jump(winnr, origin_cursor, target_cursor)
+  vim.schedule(function()
+    if not api.nvim_win_is_valid(winnr) then
+      return
+    end
 
-  if not orig_state then
+    -- The command may have deleted lines under the target (`:38,40d`), so both
+    -- saved line numbers are re-clamped against the buffer as it is now. Without
+    -- this the calls below raise "Invalid cursor line: out of range" out of a
+    -- scheduled callback. Only the line needs it; `nvim_win_set_cursor` clamps
+    -- the column itself.
+    local bufnr = api.nvim_win_get_buf(winnr)
+    local origin = { clamp_linenr(bufnr, origin_cursor[1]), origin_cursor[2] }
+    local target = { clamp_linenr(bufnr, target_cursor[1]), target_cursor[2] }
+
+    local previous_win = api.nvim_get_current_win()
+    api.nvim_set_current_win(winnr)
+    -- Vim's own `:N` moves the cursor without touching the jumplist. Going back
+    -- to the origin and moving with `G` pushes it, so `<C-o>` returns there.
+    api.nvim_win_set_cursor(winnr, origin)
+    cmd(("normal! %dG"):format(target[1]))
+    api.nvim_win_set_cursor(winnr, target)
+    cmd "normal! zv" -- open any fold the target sits in
+    if state.opts.centered_peeking then
+      cmd "normal! zz"
+    end
+    if previous_win ~= winnr and api.nvim_win_is_valid(previous_win) then
+      api.nvim_set_current_win(previous_win)
+    end
+  end)
+end
+
+---Restore a window that was peeked.
+---@param winnr integer Window handle
+---@param stay boolean Keep the previewed position instead of going back
+local function unpeek(winnr, stay)
+  local win_state = state.win_states[winnr]
+  if not win_state then
     return
   end
+  -- Dropped up front so a restore that fires autocommands cannot re-enter this
+  -- for the same window.
+  state.win_states[winnr] = nil
+
+  -- The range is on the buffer, which outlives the window, so it goes either way.
+  clear_range(win_state.bufnr)
 
   -- The window can be gone before restoration runs, for example a peeked split
   -- that was closed, or `disable()` called afterwards. Every window API call
-  -- below would raise on a stale handle, so drop the saved state and stop. The
-  -- range still has to go: it is on the buffer, which outlives the window.
+  -- below would raise on a stale handle.
   if not api.nvim_win_is_valid(winnr) then
-    clear_range(orig_state.bufnr)
-    state.win_states[winnr] = nil
     state.peek_cursor = nil
     return
   end
 
-  clear_range(orig_state.bufnr)
+  set_win_options(winnr, win_state.options)
 
-  -- Restore original window options
-  set_win_options(winnr, orig_state.options)
-
-  -- The cursor goes back to where the peek started, on both paths. On an abort
+  -- The cursor goes back to where the peek started on both paths. On an abort
   -- that is the whole job. On a confirm it is what makes the jump come *from* the
-  -- origin, so the jumplist entry pushed below records the line the user was
-  -- actually on and <C-o> returns there. The scheduled block then moves to the
-  -- target; Vim's own cursor position is deliberately overridden, see the comment
-  -- there.
-  api.nvim_win_set_cursor(winnr, orig_state.cursor)
+  -- origin, so the jumplist entry `schedule_jump` pushes records the line the
+  -- user was actually on.
+  api.nvim_win_set_cursor(winnr, win_state.cursor)
 
+  local target_cursor = state.peek_cursor
+  state.peek_cursor = nil
   if stay then
-    local final_cursor = state.peek_cursor
-    local origin_cursor = orig_state.cursor
-    state.peek_cursor = nil
-    if final_cursor then
-      vim.schedule(function()
-        if not api.nvim_win_is_valid(winnr) then
-          return
-        end
-        -- The confirmed Ex command has already run by now and may have deleted
-        -- lines (`:38,40d`), so both saved line numbers are re-clamped against
-        -- the buffer as it is now. Without this the calls below raise
-        -- "Invalid cursor line: out of range" out of a scheduled callback.
-        -- Only the line needs clamping; nvim_win_set_cursor clamps the column.
-        local bufnr = api.nvim_win_get_buf(winnr)
-        local origin = { clamp_linenr(bufnr, origin_cursor[1]), origin_cursor[2] }
-        local target = { clamp_linenr(bufnr, final_cursor[1]), final_cursor[2] }
-        local previous_win = api.nvim_get_current_win()
-        api.nvim_set_current_win(winnr)
-        -- Vim's native :N moves the cursor but does not push to the jumplist;
-        -- force cursor back to origin then use G-motion so the origin is pushed
-        -- to the jumplist (so <C-o> returns to it).
-        api.nvim_win_set_cursor(winnr, origin)
-        cmd(("normal! %dG"):format(target[1]))
-        api.nvim_win_set_cursor(winnr, target)
-        -- Unfold at cursor position
-        cmd "normal! zv"
-        if state.opts.centered_peeking then
-          cmd "normal! zz"
-        end
-        if previous_win ~= winnr and api.nvim_win_is_valid(previous_win) then
-          api.nvim_set_current_win(previous_win)
-        end
-      end)
+    if target_cursor then
+      schedule_jump(winnr, win_state.cursor, target_cursor)
     end
   else
     api.nvim_win_call(winnr, function()
-      fn.winrestview { topline = orig_state.topline }
+      fn.winrestview { topline = win_state.topline }
     end)
-    state.peek_cursor = nil
   end
-  state.win_states[winnr] = nil
 
-  -- Clear the statusline indicator flag (set in peek()). Re-checked because
-  -- restoring options above can fire autocommands that close the window.
+  -- Clears the flag `peek` set. Re-checked because restoring options above can
+  -- fire autocommands that close the window.
   if api.nvim_win_is_valid(winnr) then
     vim.w[winnr].numb_peeking = nil
   end
@@ -308,21 +301,11 @@ local function is_disabled_for(winnr)
   return vim.tbl_contains(by_filetype, api.nvim_get_option_value("filetype", { buf = bufnr }))
 end
 
----Check if window is currently peeking
----@param winnr integer Window handle
----@return boolean
-local function has_saved_state(winnr)
-  return state.win_states[winnr] ~= nil
-end
-
 -------------------------------------------------------------------------------
--- Autocommand Callbacks
---
--- Local: they are wired straight into `nvim_create_autocmd` below, so nothing
--- outside this file needs a name for them.
+-- Autocommands
 -------------------------------------------------------------------------------
 
----Handle command line changes during Ex command input
+---Preview whatever the command line now points at.
 local function on_cmdline_changed()
   local winnr = api.nvim_get_current_win()
 
@@ -341,9 +324,8 @@ local function on_cmdline_changed()
   local last_line = api.nvim_buf_line_count(api.nvim_win_get_buf(winnr))
 
   local target = address.resolve(fn.getcmdline(), base_line, last_line, state.opts.number_only)
-
   if not target then
-    if has_saved_state(winnr) then
+    if win_state then
       unpeek(winnr, false)
       cmd "redraw"
     end
@@ -363,18 +345,16 @@ local function on_cmdline_changed()
   cmd "redraw"
 end
 
----Handle command line exit
+---Tear every peek down, staying at the target when the command was confirmed.
 local function on_cmdline_exit()
-  -- Stay at the target when the command was confirmed. `CmdlineLeave` fires
-  -- before the command runs, so `abort == false` only means Enter was pressed;
-  -- the command itself may still fail, and the jump is applied anyway. `:-100`
-  -- from line 5 is the clearest case: Vim rejects the range with E16 and leaves
-  -- the cursor at 5, while numb lands on line 1. That follows from clamping the
-  -- target, which is also what makes `:9999` land on the last line instead of
-  -- erroring, so it is a consequence of a documented choice rather than a
-  -- separate bug.
-  local event = api.nvim_get_vvar "event"
-  local stay = not event.abort
+  -- `CmdlineLeave` fires before the command runs, so `abort == false` only means
+  -- Enter was pressed; the command itself may still fail, and the jump is applied
+  -- anyway. `:-100` from line 5 is the clearest case: Vim rejects the range with
+  -- E16 and leaves the cursor at 5, while numb lands on line 1. That follows from
+  -- clamping the target, which is also what makes `:9999` land on the last line
+  -- instead of erroring, so it is a consequence of a documented choice rather
+  -- than a separate bug.
+  local stay = not api.nvim_get_vvar("event").abort
 
   -- Every window with saved state is torn down, not just the current one. The
   -- window that was peeking can already be gone: closing it during a command
@@ -388,102 +368,132 @@ local function on_cmdline_exit()
   end
 end
 
--- Augroup handle is non-nil while the plugin is active.
+---Reclaim the state of a window that was closed mid-peek.
+---Belt and braces rather than the main path: `on_cmdline_exit` walks every saved
+---window and `unpeek` handles a stale handle itself, and a window closed while
+---the command line is open emits no `WinClosed` at all. What this does add is
+---timing: when a peeked window is closed with no command line in flight, which
+---is what a direct `numb._peek` call amounts to, the range stops being drawn at
+---that moment instead of waiting for a `CmdlineLeave` that may never come.
+---@param event table Autocommand callback argument
+local function on_win_closed(event)
+  local winnr = tonumber(event.match)
+  local win_state = winnr and state.win_states[winnr]
+  if win_state then
+    -- Cleared through the remembered buffer, not the window: by the time this
+    -- runs during a command line the window can already be gone, and looking the
+    -- buffer up through it would silently do nothing.
+    clear_range(win_state.bufnr)
+    state.win_states[winnr] = nil
+  end
+end
+
+-- Non-nil while the plugin is active, which is what `is_enabled()` reports.
 ---@type integer|nil
 local augroup_id = nil
 
----Install (or reinstall) the CmdlineChanged/CmdlineLeave autocommands.
+---Install (or reinstall) the autocommands.
 ---`clear = true` on the augroup makes this idempotent across repeated calls
----(re-`setup()` or `disable` → `enable`).
+---(re-`setup()`, or `disable` then `enable`).
 local function install_autocmds()
   augroup_id = api.nvim_create_augroup("numb", { clear = true })
-  -- Defined here rather than only in `setup()`, so that peeking is never
-  -- installed without the group the range preview draws with. A config that sets
+
+  -- Defined here rather than only in `setup()`, so peeking is never installed
+  -- without the group the range preview draws with. A config that sets
   -- `g:loaded_numb` and then calls `enable()` skips `setup()` entirely, and used
   -- to end up with a working peek and an invisible range.
   define_highlight()
-  api.nvim_create_autocmd("CmdlineChanged", {
-    group = augroup_id,
-    pattern = ":",
-    callback = on_cmdline_changed,
-  })
-  api.nvim_create_autocmd("CmdlineLeave", {
-    group = augroup_id,
-    pattern = ":",
-    callback = on_cmdline_exit,
-  })
-  api.nvim_create_autocmd("ColorScheme", {
-    group = augroup_id,
-    callback = define_highlight,
-  })
-  api.nvim_create_autocmd("WinClosed", {
-    group = augroup_id,
-    callback = function(event)
-      -- A window closed mid-peek can never be restored, and `unpeek` only ever
-      -- runs for the current window on `CmdlineLeave`, so without this its saved
-      -- state would sit in `win_states` for the rest of the session, and the
-      -- range it drew would stay on the buffer for the rest of the session too.
-      local winnr = tonumber(event.match)
-      local win_state = winnr and state.win_states[winnr]
-      if win_state then
-        -- Cleared through the remembered buffer, not the window: by the time
-        -- this runs during a command line the window can already be gone, and
-        -- looking the buffer up through it would silently do nothing.
-        clear_range(win_state.bufnr)
-        state.win_states[winnr] = nil
-      end
-    end,
-  })
+
+  api.nvim_create_autocmd("CmdlineChanged", { group = augroup_id, pattern = ":", callback = on_cmdline_changed })
+  api.nvim_create_autocmd("CmdlineLeave", { group = augroup_id, pattern = ":", callback = on_cmdline_exit })
+  api.nvim_create_autocmd("ColorScheme", { group = augroup_id, callback = define_highlight })
+  api.nvim_create_autocmd("WinClosed", { group = augroup_id, callback = on_win_closed })
 end
 
----@class NumbSubcommand
----@field impl fun() Subcommand implementation
-
----Dispatch table for `:Numb` subcommands.
----@type table<string, NumbSubcommand>
-local subcommand_tbl = {
-  enable = {
-    impl = function()
-      numb.enable()
-    end,
-  },
-  disable = {
-    impl = function()
+---What `:Numb {action}` does, and the set tab completion offers.
+---@type table<string, fun()>
+local ACTIONS = {
+  enable = function()
+    numb.enable()
+  end,
+  disable = function()
+    numb.disable()
+  end,
+  toggle = function()
+    if numb.is_enabled() then
       numb.disable()
-    end,
-  },
-  toggle = {
-    impl = function()
-      if numb.is_enabled() then
-        numb.disable()
-      else
-        numb.enable()
-      end
-    end,
-  },
+    else
+      numb.enable()
+    end
+  end,
 }
 
 ---Install (or reinstall) the `:Numb` user command.
----`nvim_create_user_command` silently replaces an existing command with the
----same name, so this is safe to call repeatedly.
+---`nvim_create_user_command` silently replaces an existing command with the same
+---name, so this is safe to call repeatedly.
 local function install_user_command()
   api.nvim_create_user_command("Numb", function(o)
-    local key = o.fargs[1] or "toggle"
-    local subcommand = subcommand_tbl[key]
-    if not subcommand then
-      vim.notify("[numb] unknown subcommand: " .. key, vim.log.levels.ERROR)
+    local name = o.fargs[1] or "toggle"
+    local action = ACTIONS[name]
+    if not action then
+      vim.notify("[numb] unknown subcommand: " .. name, vim.log.levels.ERROR)
       return
     end
-    subcommand.impl()
+    action()
   end, {
     nargs = "?",
     desc = "Control numb.nvim (enable | disable | toggle)",
     complete = function(arg_lead)
-      return vim.tbl_filter(function(key)
-        return key:find(arg_lead, 1, true) == 1
-      end, vim.tbl_keys(subcommand_tbl))
+      local names = vim.tbl_filter(function(name)
+        return name:find(arg_lead, 1, true) == 1
+      end, vim.tbl_keys(ACTIONS))
+      table.sort(names)
+      return names
     end,
   })
+end
+
+-------------------------------------------------------------------------------
+-- Public API
+-------------------------------------------------------------------------------
+
+---Setup the plugin with optional configuration.
+---Invalid options are reported through `vim.notify` and ignored rather than
+---raising, so a typo cannot leave the plugin uninstalled.
+---@param user_opts NumbConfig|any Configuration options
+function numb.setup(user_opts)
+  state.opts = config.resolve(user_opts)
+  install_autocmds()
+  install_user_command()
+end
+
+---Enable the plugin, reinstalling the autocommands with the current config.
+---Safe to call when already enabled.
+---@param user_opts NumbConfig|nil Optional config override
+function numb.enable(user_opts)
+  if user_opts then
+    state.opts = config.resolve(user_opts)
+  end
+  if not numb.is_enabled() then
+    install_autocmds()
+  end
+end
+
+---Disable the plugin and drop every peek, keeping the configuration.
+function numb.disable()
+  -- Restore still-peeking windows before their saved state is dropped, and never
+  -- let a failed restore block the teardown below. `vim.tbl_keys` snapshots the
+  -- keys because `unpeek` removes entries from the table being walked.
+  for _, winnr in ipairs(vim.tbl_keys(state.win_states)) do
+    pcall(unpeek, winnr, false)
+  end
+  state.win_states = {}
+  state.peek_cursor = nil
+
+  if augroup_id then
+    pcall(api.nvim_del_augroup_by_id, augroup_id)
+    augroup_id = nil
+  end
 end
 
 ---Returns the configuration currently in effect, defaults included.
@@ -520,45 +530,7 @@ function numb.is_peeking(winnr)
   return vim.w[winnr].numb_peeking == true
 end
 
----Enable the plugin (re-install autocommands using the current config).
----Safe to call when already enabled.
----@param user_opts NumbConfig|nil Optional config override
-function numb.enable(user_opts)
-  if user_opts then
-    state.opts = config.resolve(user_opts)
-  end
-  if numb.is_enabled() then
-    return
-  end
-  install_autocmds()
-end
-
----Setup the plugin with optional configuration.
----Invalid options are reported through `vim.notify` and ignored rather than
----raising, so a typo cannot leave the plugin uninstalled.
----@param user_opts NumbConfig|any Configuration options
-function numb.setup(user_opts)
-  state.opts = config.resolve(user_opts)
-  install_autocmds()
-  install_user_command()
-end
-
----Disable the plugin and clear state
-function numb.disable()
-  -- Restore still-peeking windows before their saved state is dropped, and never
-  -- let a failed restore block the teardown below. `vim.tbl_keys` snapshots the
-  -- keys because `unpeek` removes entries from the table being walked.
-  for _, winnr in ipairs(vim.tbl_keys(state.win_states)) do
-    pcall(unpeek, winnr, false)
-  end
-  reset_state()
-  if augroup_id then
-    pcall(api.nvim_del_augroup_by_id, augroup_id)
-    augroup_id = nil
-  end
-end
-
--- Expose state for testing (underscore prefix = internal)
+-- Internals the test suite drives directly; not part of the public API.
 numb._state = state
 numb._peek = peek
 numb._unpeek = unpeek
