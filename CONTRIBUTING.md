@@ -35,6 +35,41 @@ there is nothing to vendor; `scripts/tools.sh` pins the same versions CI install
 regression suite. CI runs the same script on every push and pull request to
 `master`.
 
+## Project Layout
+
+```
+lua/numb/init.lua      everything that touches editor state
+lua/numb/address.lua   Ex address resolution, pure
+lua/numb/config.lua    option defaults and validation, pure
+lua/numb/health.lua    :checkhealth numb
+plugin/numb.lua        calls setup() once the plugin is on the runtimepath
+doc/numb.txt           the help file behind :h numb, checked against the code
+tests/init.lua         wires Neovim for the suite
+tests/run.lua          headless regression suite
+scripts/check.sh       every gate CI runs, and each one runnable on its own
+scripts/tools.sh       fetches the stylua and selene versions CI pins
+scripts/verify_*.lua   the gates that need a running Neovim
+```
+
+The plugin is three steps, all of them in `init.lua`:
+
+1. `CmdlineChanged` asks `numb.address` what the command line points at.
+2. `peek()` previews that line, saving the window options, cursor and view it
+   changes into `state.win_states[winnr]`.
+3. `CmdlineLeave` restores that saved state, staying at the target when the
+   command was confirmed rather than aborted.
+
+`address.lua` and `config.lua` are pure on purpose: their rules can be tested by
+calling one function, with no window, buffer or command line involved. Keep new
+logic that does not need editor state in one of them.
+
+Adding an option touches four files, and `scripts/verify_doc.lua` fails the build
+if any of them is missed: the default in `config.DEFAULTS`, the row in the
+`Defaults:` block of `doc/numb.txt` plus a `*numb-{option}*` tag for it, the
+table in `README.md`, and a test in `tests/run.lua`. The same check requires a
+`*numb.{function}()*` tag for every public function, so the help file is not
+optional documentation here.
+
 ## Reporting Bugs
 
 Open an issue with:
@@ -124,7 +159,7 @@ code and any lint error.
 - Keep dependencies minimal: no runtime requirements outside stock
   Neovim and Lua.
 - Prefer feature flags via `require('numb').setup{...}` over global state.
-- Document every new option in `README.md`.
+- Document every new option in `README.md` and in `doc/numb.txt`.
 - Avoid scope creep. Peek behavior should remain unobtrusive and fast.
 
 ## Releases
