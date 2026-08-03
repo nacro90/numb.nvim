@@ -27,8 +27,43 @@ local SEPARATORS = { [","] = true, [";"] = true }
 ---@param base_line integer The line a relative offset counts from
 ---@param last_line integer|nil Line count of the buffer, the value of `$`
 ---@return integer|nil Line number, or nil when the expression is not one
+---Split an address into its base and check the rest is only signed offsets.
+---An Ex address is one base, optionally followed by any number of offsets, so a
+---second `.` or `$`, or digits after an offset, is not an address at all: Vim
+---rejects `:..`, `:$$`, `:5..10` and `:$-$` with E492. Accepting them meant
+---resolving `..` to the current line written out twice, `2020` from line 20, and
+---previewing a line for a command that was never going to run.
+---@param str string
+---@return string|nil base The base, `""` when the address is offsets only
+local function base_of(str)
+  local base, rest = str:match "^([%.%$])(.*)$"
+  if not base then
+    base, rest = str:match "^(%d+)(.*)$"
+  end
+  if not base then
+    -- No base at all is valid: `:+5` counts from the line the caller gave us.
+    base, rest = "", str
+  end
+
+  -- Zero or more offsets, each a sign and an optional count, so `:++` and a
+  -- trailing `:+` stay valid.
+  while rest ~= "" do
+    local _, tail = rest:match "^([%+%-]%d*)(.*)$"
+    if not tail then
+      return nil
+    end
+    rest = tail
+  end
+
+  return base
+end
+
 function address.parse(str, base_line, last_line)
   if not str:match("^" .. address.PATTERN .. "$") then
+    return nil
+  end
+
+  if not base_of(str) then
     return nil
   end
 

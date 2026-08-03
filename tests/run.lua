@@ -1244,6 +1244,28 @@ function Tests.address_dollar_confirmed_jumps_to_the_last_line()
   assert(not numb.is_peeking(), "the peek must be over once the command has run")
 end
 
+function Tests.address_too_large_previews_the_last_line()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  -- Consistent with `:999`, which the plugin deliberately clamps rather than
+  -- letting Vim reject it.
+  local observed = probe_cmdline ":99999999999999999999"
+  assert(observed.peeking, "an enormous address must still peek")
+  assert(observed.line == 40, ("it must clamp to the last line, got %d"):format(observed.line))
+end
+
+function Tests.address_repeated_symbol_does_not_preview()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 20, 0 })
+  -- Vim rejects ':..' with E492 and never moves, so a preview would promise a
+  -- jump that cannot happen.
+  local observed = probe_cmdline ":.."
+  assert(not observed.peeking, "':..' must not peek")
+  assert_cursor(20, "and must leave the cursor alone")
+end
+
 function Tests.address_non_address_command_does_not_preview()
   configure()
   reset_buffer()
@@ -1364,6 +1386,19 @@ local RESOLVE_CASES = {
   { "5;+3d", 1, 40, { line = 5, first = 5, last = 8 } },
   { "5,10;+2d", 1, 40, { line = 10, first = 10, last = 12 } },
   { "5;+3,+6d", 1, 40, { line = 8, first = 8, last = 11 } },
+  -- An Ex address is one base followed by signed offsets. A second `.` or `$`,
+  -- or digits after an offset, is not an address, and Vim says so: `:..`, `:$$`,
+  -- `:5..10` and `:$-$` are all E492. Previewing a line for them would answer a
+  -- command that is never going to run.
+  { "..", 20, 40, nil },
+  { "$$", 20, 40, nil },
+  { "5..10", 20, 40, nil },
+  { "$-$", 20, 40, nil },
+  { ".$", 20, 40, nil },
+  { "5.5", 20, 40, nil },
+  -- Vim accepts a bare run of signs and stays put, so these do resolve.
+  { "+-", 20, 40, { line = 20 } },
+  { "-+", 20, 40, { line = 20 } },
   -- nothing this module can resolve
   { "help numb", 5, 40, nil },
   { "'a,'bd", 20, 40, nil },
@@ -1412,6 +1447,17 @@ function Tests.address_resolve_covers_every_supported_shape()
     end
   end
   assert(#failures == 0, "address.resolve disagreed on:\n  " .. table.concat(failures, "\n  "))
+end
+
+function Tests.address_resolve_survives_an_address_too_large_to_count()
+  local address = require "numb.address"
+  -- Twenty digits arrive as a float rather than an integer, which is fine: it
+  -- clamps to the last line like `:999` does. Guarded because arithmetic that
+  -- converted to an integer instead would overflow to the most negative one and
+  -- land on line 1, the opposite end of the buffer from where this belongs.
+  local target = address.resolve("99999999999999999999", 20, 40, false)
+  assert(target ~= nil, "an enormous but well formed address must still resolve")
+  assert(target.line > 40, ("it must point past the buffer, got %d"):format(target.line))
 end
 
 function Tests.address_resolve_honours_number_only()

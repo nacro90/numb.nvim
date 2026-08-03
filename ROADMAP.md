@@ -48,6 +48,11 @@ deferred, or dropped after discussion.
   permanently on and the peek visual is indistinguishable.
 - **Mark/search range peek.** Extend range peek to `'a,'b` and `/pat/`
   patterns. Deferred until MVP range peek lands.
+- **Reversed ranges written with a semicolon.** `:20;-3d` resolves to 17..20 and
+  is highlighted, but Vim rejects it with `E493: Backwards range given` unless it
+  can prompt to swap. A comma range behaves differently: Vim offers the swap, so
+  highlighting the swapped range is right there. Worth deciding whether a
+  semicolon range should be left unhighlighted instead of guessing at the swap.
 - **Move the test exit code out of the test module.** `tests/run.lua`
   currently calls `cquit` itself when headless, because the launcher
   appends `+qall`, which exits 0 even after an error and would otherwise

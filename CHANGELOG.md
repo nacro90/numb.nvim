@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Malformed addresses no longer produce a preview. `:..`, `:$$`, `:.$`, `:5.5`,
+  `:5..10` and `:$-$` are all rejected by Vim with `E492`, but each used to be
+  previewed: `.` and `$` were replaced with numbers wherever they appeared, so
+  `:..` from line 20 resolved to line 2020 and peeked the last line. An Ex
+  address is one base followed by signed offsets, and that is now what is
+  accepted, so nothing is promised for a command that will not run. Every valid
+  form still resolves, including `:+-` and a bare `:+`.
+
 ## [1.2.0] - 2026-08-02
 
 ### Added
