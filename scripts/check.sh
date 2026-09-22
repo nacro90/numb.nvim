@@ -35,7 +35,8 @@ Stages:
   format   stylua --check over the Lua sources
   lint     selene over the Lua sources
   docs     help file against the Lua sources, dashes, stated Neovim floor
-  nvim     Neovim version floor, load smoke test, test suite, health check
+  nvim     Neovim version floor, load smoke test, test suite, health check,
+           screen updates through an embedded UI
 
 With no arguments every stage runs. CI splits them so the tool-only stages run
 once while the nvim stage runs across the Neovim version matrix.
@@ -152,6 +153,11 @@ if [ "$run_nvim" -eq 1 ]; then
   # this exercises the real API and the real :checkhealth dispatch.
   echo "==> Health check"
   nvim -l scripts/verify_health.lua
+
+  # The suite runs headless, where nothing is drawn, so only this can see a
+  # frame the user was never meant to see.
+  echo "==> Screen updates"
+  nvim -l scripts/verify_redraw.lua
 fi
 
 echo "All checks passed."

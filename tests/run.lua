@@ -1001,6 +1001,39 @@ function Tests.centered_peeking_only_scrolls_the_peeked_window()
   close_other_windows()
 end
 
+-- A count before a mapping that opens the command line makes Vim insert
+-- `.,.+{count-1}`, which numb peeks before the mapping's `<C-U>` clears it. That
+-- peek must not run a Normal mode command: `:normal` resets `v:count`, so the
+-- mapping would see a count of 1. quick-scope's `f` mapping is built exactly like
+-- this, and `6fi` jumped to the first `i` instead of the sixth (#36).
+function Tests.count_survives_a_mapping_that_opens_the_command_line()
+  local numb = configure { centered_peeking = true }
+  reset_tall_buffer()
+  vim.api.nvim_win_set_cursor(0, { 250, 0 })
+
+  local peeked_during_mapping = false
+  local probe = vim.api.nvim_create_autocmd("CmdlineChanged", {
+    callback = function()
+      peeked_during_mapping = peeked_during_mapping or numb.is_peeking()
+    end,
+  })
+  vim.cmd [[nnoremap <silent> <Plug>(numb-test-count) :<C-U>let g:numb_test_count = v:count1<CR>]]
+  vim.g.numb_test_count = nil
+
+  -- No "n" flag: the keys have to go through the mapping.
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("6<Plug>(numb-test-count)", true, false, true), "x", false)
+  wait_until_idle()
+  local seen_count = vim.g.numb_test_count
+
+  vim.api.nvim_del_autocmd(probe)
+  vim.cmd [[nunmap <Plug>(numb-test-count)]]
+  vim.g.numb_test_count = nil
+
+  -- Without a peek the count would survive for the wrong reason.
+  assert(peeked_during_mapping, "the range the count inserts must be peeked")
+  assert(seen_count == 6, ("the mapping must see v:count1 == 6, got %s"):format(tostring(seen_count)))
+end
+
 -------------------------------------------------------------------------------
 -- CONFIG VALIDATION TESTS
 -------------------------------------------------------------------------------
