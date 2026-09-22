@@ -15,7 +15,14 @@ vim.opt.runtimepath:append(vim.fn.getcwd())
 require("numb").setup {}
 
 vim.cmd "checkhealth numb"
-local report = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+-- Neovim 0.13 runs the checks asynchronously, so the command returns with the
+-- buffer still empty. Every version sets the `checkhealth` filetype only once
+-- the report is written: synchronously before 0.13, at the end of the task on it.
+local health_buf = vim.api.nvim_get_current_buf()
+vim.wait(5000, function()
+  return vim.bo[health_buf].filetype == "checkhealth"
+end, 10)
+local report = vim.api.nvim_buf_get_lines(health_buf, 0, -1, false)
 
 if #report < 5 then
   io.stderr:write "checkhealth numb produced no report\n"
