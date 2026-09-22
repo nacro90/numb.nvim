@@ -42,8 +42,11 @@ calling one function, which is why the suite covers them with tables of cases
 rather than command line round trips.
 
 `scripts/` holds the gates: `check.sh` drives everything, and `verify_doc.lua`,
-`verify_health.lua` and `verify_load.lua` are the checks that need a running
-Neovim. Workflows call `check.sh` stages rather than carrying their own logic.
+`verify_health.lua`, `verify_load.lua` and `verify_redraw.lua` are the checks
+that need a running Neovim. `verify_redraw.lua` is the only one that sees the
+screen: it attaches to `nvim --embed` as a UI and fails on any frame the user was
+never meant to see, which is how flicker is tested. Workflows call `check.sh`
+stages rather than carrying their own logic.
 
 The Stylua config (`stylua.toml`) sits at the repo root so the formatter can be
 run from anywhere. Headless regression tests live in `tests/` (`tests/init.lua`
@@ -57,8 +60,8 @@ numb.nvim peeks buffer lines when typing `:{number}` in command mode without jum
 
 ### Core Flow (`lua/numb/init.lua`)
 
-1. **setup()** installs the `CmdlineChanged`, `CmdlineLeave`, `ColorScheme` and `WinClosed` autocommands in the "numb" augroup and defines the `NumbRange` highlight
-2. **on_cmdline_changed()** hands the command line to `numb.address`, then dispatches on the result: nothing, a single line, or a line plus the range around it. Local, wired straight into the autocommand
+1. **setup()** installs the `CmdlineChanged`, `CmdlineLeave`, `ColorScheme`, `WinClosed` and `SafeState` autocommands in the "numb" augroup and defines the `NumbRange` highlight
+2. **on_cmdline_changed()** hands the command line to `numb.address`, then dispatches on the result: nothing, a single line, or a line plus the range around it. Local, wired straight into the autocommand. It asks for a redraw rather than drawing: `SafeState`, with a short timer as fallback, draws once Vim is about to wait for the user, so keys that arrive together (a mapping, a count before `:`, a paste) show only their final state
 3. **peek()** saves window state (buffer, cursor, options, topline) in `win_states[winnr]`, applies peeking options (number, cursorline, foldenable=false), and moves the cursor to the target line. A range also gets one extmark spanning it
 4. **on_cmdline_exit()** reads `event.abort` for stay vs restore, then unpeeks *every* window with saved state, not only the current one: a window closed during the command line emits no `WinClosed`, and focus has already moved off it
 5. **unpeek()** restores the original window options and cursor and clears the range through the buffer it was drawn on; if staying, a scheduled callback re-clamps the target against the buffer as the command left it, pushes the jumplist entry and unfolds

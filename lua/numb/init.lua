@@ -66,7 +66,7 @@ end
 -------------------------------------------------------------------------------
 -- Window state
 --
--- View-affecting calls (`winsaveview`, `winrestview`, `normal! zz`) always act
+-- View-affecting calls (`winsaveview`, `winrestview`, `:normal`) always act
 -- on the *current* window, ignoring any window handle in scope, so every such
 -- call below goes through `api.nvim_win_call(winnr, ...)`. The one exception is
 -- `schedule_jump`, which makes the target window current on purpose and switches
@@ -144,6 +144,29 @@ local function highlight_range(winnr, first, last)
   })
 end
 
+---Scroll a window so its cursor line sits mid window, as `zz` does.
+---Not `normal! zz`: a peek can run inside a mapping, and `:normal` resets the
+---`v:count` that mapping reads (#36). With 'scrolloff' at 999 Vim's own layout
+---code centers the line, wrapped lines included; only at the end of the buffer
+---does the window stay full instead of scrolling past the last line.
+---@param winnr integer Window handle
+local function center_cursor(winnr)
+  -- The local value, which is -1 when the window follows the global one, so
+  -- writing it back restores that link rather than pinning today's number.
+  local scrolloff = api.nvim_get_option_value("scrolloff", { win = winnr, scope = "local" })
+  api.nvim_set_option_value("scrolloff", 999, { win = winnr, scope = "local" })
+  -- Setting the cursor is what makes Vim recompute the view under the new
+  -- 'scrolloff', but only once the view is marked stale: the peek has just moved
+  -- the cursor, so the view is already valid for it and setting the same
+  -- position again would change nothing. Restoring the current topline is what
+  -- marks it stale, without scrolling anything itself.
+  api.nvim_win_call(winnr, function()
+    fn.winrestview { topline = fn.winsaveview().topline }
+  end)
+  api.nvim_win_set_cursor(winnr, api.nvim_win_get_cursor(winnr))
+  api.nvim_set_option_value("scrolloff", scrolloff, { win = winnr, scope = "local" })
+end
+
 -------------------------------------------------------------------------------
 -- Peeking
 -------------------------------------------------------------------------------
@@ -180,9 +203,7 @@ local function peek(winnr, linenr)
   api.nvim_win_set_cursor(winnr, state.peek_cursor)
 
   if state.opts.centered_peeking then
-    api.nvim_win_call(winnr, function()
-      cmd "normal! zz"
-    end)
+    center_cursor(winnr)
   end
 
   -- Window-scoped (not buffer-scoped) so the flag statusline integrations read
@@ -220,8 +241,10 @@ local function schedule_jump(winnr, origin_cursor, target_cursor)
     cmd(("normal! %dG"):format(target[1]))
     api.nvim_win_set_cursor(winnr, target)
     cmd "normal! zv" -- open any fold the target sits in
+    -- Centered the same way the preview was, so landing does not move the view
+    -- the preview just showed.
     if state.opts.centered_peeking then
-      cmd "normal! zz"
+      center_cursor(winnr)
     end
     if previous_win ~= winnr and api.nvim_win_is_valid(previous_win) then
       api.nvim_set_current_win(previous_win)
@@ -302,6 +325,46 @@ local function is_disabled_for(winnr)
 end
 
 -------------------------------------------------------------------------------
+-- Drawing
+--
+-- A peek is applied on every change to the command line but drawn only once Vim
+-- is about to wait for the user. Characters that arrive together are processed
+-- one `CmdlineChanged` at a time: a mapping, the `.,.+5` Vim inserts for a count
+-- before `:`, a paste. Drawing after each of those showed states nobody was
+-- meant to see, such as the peek a mapping clears with `<C-U>` a moment later
+-- (#36). Only the drawing waits; the peek itself, and so what a confirmed
+-- command lands on, does not depend on how fast the keys came.
+-------------------------------------------------------------------------------
+
+---How long a requested redraw waits for `SafeState` before drawing anyway. It
+---is a fallback for anything that keeps Vim from reaching `SafeState` while the
+---user is looking at the command line, such as an open completion menu or an
+---`'eventignore'` that lists it. The timer normally fires only while Vim waits
+---for input, so not in the middle of a mapping; inside one that waits itself,
+---with `getchar()` or `:sleep`, it costs at most one extra redraw.
+local REDRAW_FALLBACK_MS = 50
+
+---True while a peek has changed the screen and has not been drawn yet.
+local redraw_pending = false
+
+---Draw what the peek changed, if anything is still waiting to be drawn.
+local function flush_redraw()
+  if redraw_pending then
+    redraw_pending = false
+    cmd "redraw"
+  end
+end
+
+---Ask for the peek to be drawn once Vim goes idle.
+local function request_redraw()
+  if redraw_pending then
+    return
+  end
+  redraw_pending = true
+  vim.defer_fn(flush_redraw, REDRAW_FALLBACK_MS)
+end
+
+-------------------------------------------------------------------------------
 -- Autocommands
 -------------------------------------------------------------------------------
 
@@ -327,7 +390,7 @@ local function on_cmdline_changed()
   if not target then
     if win_state then
       unpeek(winnr, false)
-      cmd "redraw"
+      request_redraw()
     end
     return
   end
@@ -342,7 +405,7 @@ local function on_cmdline_changed()
   if state.opts.range_peek and target.first then
     highlight_range(winnr, target.first, target.last)
   end
-  cmd "redraw"
+  request_redraw()
 end
 
 ---Tear every peek down, staying at the target when the command was confirmed.
@@ -355,6 +418,11 @@ local function on_cmdline_exit()
   -- instead of erroring, so it is a consequence of a documented choice rather
   -- than a separate bug.
   local stay = not api.nvim_get_vvar("event").abort
+
+  -- Leaving the command line redraws on its own, and a redraw still pending
+  -- would otherwise run at the first `SafeState` in Normal mode, drawing the
+  -- window between the command and the jump `schedule_jump` applies after it.
+  redraw_pending = false
 
   -- Every window with saved state is torn down, not just the current one. The
   -- window that was peeking can already be gone: closing it during a command
@@ -408,6 +476,7 @@ local function install_autocmds()
   api.nvim_create_autocmd("CmdlineLeave", { group = augroup_id, pattern = ":", callback = on_cmdline_exit })
   api.nvim_create_autocmd("ColorScheme", { group = augroup_id, callback = define_highlight })
   api.nvim_create_autocmd("WinClosed", { group = augroup_id, callback = on_win_closed })
+  api.nvim_create_autocmd("SafeState", { group = augroup_id, callback = flush_redraw })
 end
 
 ---What `:Numb {action}` does, and the set tab completion offers.
@@ -489,6 +558,7 @@ function numb.disable()
   end
   state.win_states = {}
   state.peek_cursor = nil
+  redraw_pending = false
 
   if augroup_id then
     pcall(api.nvim_del_augroup_by_id, augroup_id)

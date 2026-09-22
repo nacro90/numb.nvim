@@ -183,7 +183,8 @@ centered_peeking                                       *numb-centered_peeking*
 
                 Center the peeked line in the window, as |zz| does. This also
                 applies to the confirmed jump, so the line you land on stays
-                where you saw it.
+                where you saw it. Near the end of the buffer the window stays
+                full rather than scrolling past the last line.
 
 ------------------------------------------------------------------------------
 range_peek                                                   *numb-range_peek*

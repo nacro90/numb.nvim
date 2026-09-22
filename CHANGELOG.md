@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `:Numb <Tab>` completes `disable`, `enable` and `toggle` in that order. The
   candidates used to be returned in table order, which Lua does not specify, so
   the list could come back differently from one session to the next.
+- `centered_peeking` keeps the window full near the end of the buffer instead
+  of scrolling past the last line, as `zz` does. Everywhere else the previewed
+  line lands exactly where it did. This comes with the count fix below, which
+  stops centering through a Normal mode command.
 
 ### Fixed
 - Malformed addresses no longer produce a preview. `:..`, `:$$`, `:.$`, `:5.5`,
@@ -20,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   address is one base followed by signed offsets, and that is now what is
   accepted, so nothing is promised for a command that will not run. Every valid
   form still resolves, including `:+-` and a bare `:+`.
+- A count before a mapping that opens the command line reaches the mapping
+  again (#36). Vim inserts `.,.+{count-1}` for the count, numb peeked that, and
+  centering the peek ran `:normal! zz`, which resets `v:count`. With
+  quick-scope's `f` mapping, `6fi` jumped to the first `i` instead of the sixth.
+  Centering now goes through 'scrolloff' and never runs a Normal mode command.
+- A peek is drawn only once Vim is about to wait for the user, so keys that
+  arrive together no longer flash intermediate states (#36). A mapping that
+  opens the command line used to show every peek it passed through, including
+  the one quick-scope's `f` clears with `<C-U>` straight away, and could leave
+  its command text on screen; `6:` drew `:.`, `:.,` and `:.,.` before the
+  range, and a paste drew one frame per character. Typing one key at a time
+  previews exactly as before.
 
 ## [1.2.0] - 2026-08-02
 

@@ -135,7 +135,7 @@ Every option may be omitted; the rest keep their defaults.
 | `show_cursorline` | `true` | Set `cursorline` in the peeked window |
 | `hide_relativenumbers` | `true` | Turn `relativenumber` off, so the numbers stop shifting |
 | `number_only` | `false` | Peek only when the command line is nothing but an address, so `:15` peeks and `:15,20d` does not |
-| `centered_peeking` | `true` | Center the previewed line, as `zz` does |
+| `centered_peeking` | `true` | Center the previewed line, as `zz` does, except that near the end of the buffer the window stays full |
 | `range_peek` | `true` | Highlight the whole range while typing `:N,M{cmd}` |
 | `disable_for_buftype` | `{}` | `buftype` values to leave alone, for example `{ 'terminal' }` |
 | `disable_for_filetype` | `{}` | `filetype` values to leave alone, for example `{ 'fugitive' }` |
