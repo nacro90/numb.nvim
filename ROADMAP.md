@@ -41,8 +41,10 @@ Items below are not committed to any release. They may be promoted,
 deferred, or dropped after discussion.
 
 - **`peek_delay` debounce.** Reduce flicker when typing multi-digit
-  numbers quickly. Likely small benefit on modern Neovim where redraws
-  are already cheap.
+  numbers quickly. Mostly settled by v1.2.1: keys that arrive together, from a
+  mapping or a paste, are drawn once, because a peek is only drawn when Vim
+  waits for input. What is left is a preview per key for someone typing one key
+  at a time, which is the point of the plugin, so a delay would mainly add lag.
 - **Custom highlight group `NumbPeek`.** Decouple peek styling from
   the global `cursorline` option. Useful when a user has `cursorline`
   permanently on and the peek visual is indistinguishable.
@@ -68,6 +70,17 @@ deferred, or dropped after discussion.
 ## Done
 
 See [CHANGELOG.md](CHANGELOG.md) for shipped features.
+
+### v1.2.1 (2026-09-24)
+
+- A count before a mapping that opens the command line reaches the mapping
+  again, so quick-scope's `6fi` lands on the sixth `i` (#36).
+- Peeks are drawn only when Vim waits for input: mappings, `6:` and pastes no
+  longer flicker. `scripts/verify_redraw.lua` checks this through an embedded
+  UI, the first gate that sees the screen.
+- Malformed addresses such as `:..` and `:5..10` are no longer previewed.
+- `:Numb <Tab>` completes in a fixed order, and `centered_peeking` keeps the
+  window full near the end of the buffer.
 
 ### v1.2.0 (2026-08-02)
 
