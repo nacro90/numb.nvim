@@ -45,11 +45,26 @@ local function assert_cursor(expected, label)
 end
 
 local function configure(opts)
+  -- A confirmed jump from an earlier test is applied from a scheduled callback,
+  -- and it must not run inside this one. A sentinel scheduled behind it proves
+  -- the queue ahead of it has drained, where a fixed sleep would only hope so.
+  local drained = false
+  vim.schedule(function()
+    drained = true
+  end)
+  assert(
+    vim.wait(1000, function()
+      return drained
+    end, 1, false),
+    "scheduled callbacks did not drain"
+  )
   local existing = package.loaded["numb"]
   if existing and type(existing.disable) == "function" then
     existing.disable()
   end
   package.loaded["numb"] = nil
+  -- numb.peek owns the shared state, so it is reloaded too or that state survives.
+  package.loaded["numb.peek"] = nil
   local module = require "numb"
   local base_opts = { centered_peeking = false }
   if opts then
@@ -1032,6 +1047,1788 @@ function Tests.count_survives_a_mapping_that_opens_the_command_line()
   -- Without a peek the count would survive for the wrong reason.
   assert(peeked_during_mapping, "the range the count inserts must be peeked")
   assert(seen_count == 6, ("the mapping must see v:count1 == 6, got %s"):format(tostring(seen_count)))
+end
+
+-------------------------------------------------------------------------------
+-- PUBLIC PEEK API TESTS
+-------------------------------------------------------------------------------
+
+-- `numb.peek()` is the handle other plugins use to preview a line without the
+-- command line. Every test starts the cursor somewhere the peek does not target,
+-- so "restored" and "did not move" are real assertions rather than coincidences.
+
+-- Put the current window's peek-affected options in the state opposite to what a
+-- peek applies with the defaults, so both applying and restoring are observable.
+local function set_unpeeked_options()
+  vim.wo.number = false
+  vim.wo.cursorline = false
+  vim.wo.relativenumber = true
+  vim.wo.foldenable = true
+end
+
+local function assert_unpeeked_options(win, label)
+  assert(vim.wo[win].number == false, ("%s: number must be restored"):format(label))
+  assert(vim.wo[win].cursorline == false, ("%s: cursorline must be restored"):format(label))
+  assert(vim.wo[win].relativenumber == true, ("%s: relativenumber must be restored"):format(label))
+  assert(vim.wo[win].foldenable == true, ("%s: foldenable must be restored"):format(label))
+end
+
+local function cursor_of(win)
+  return vim.api.nvim_win_get_cursor(win)[1]
+end
+
+function Tests.api_peek_moves_the_cursor_and_applies_peek_options()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  set_unpeeked_options()
+  local win = vim.api.nvim_get_current_win()
+
+  local peek = numb.peek(0, 30)
+
+  assert(peek:is_active(), "a fresh peek must be active")
+  assert_cursor(30, "peek(0, 30) moves the cursor")
+  assert(vim.w[win].numb_peeking == true, "the peeking flag must be set")
+  assert(numb.is_peeking(), "is_peeking() must report the API peek")
+  assert(vim.wo[win].number == true, "show_numbers must apply to the API")
+  assert(vim.wo[win].cursorline == true, "show_cursorline must apply to the API")
+  assert(vim.wo[win].relativenumber == false, "hide_relativenumbers must apply to the API")
+  assert(vim.wo[win].foldenable == false, "folds must be disabled while peeking")
+
+  peek:cancel()
+end
+
+function Tests.api_update_moves_the_same_peek()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  set_unpeeked_options()
+  local win = vim.api.nvim_get_current_win()
+
+  local peek = numb.peek(0, 30)
+  assert_cursor(30, "precondition: the peek started at 30")
+  local updated = peek:update(12)
+
+  assert(updated == true, ("update() on an active peek must return true, got %s"):format(tostring(updated)))
+  assert(peek:is_active(), "the handle stays active after update()")
+  assert_cursor(12, "update(12) moves the cursor")
+  assert(vim.w[win].numb_peeking == true, "the peeking flag survives update()")
+  assert(vim.wo[win].number == true, "peek options still applied after update()")
+
+  peek:cancel()
+end
+
+function Tests.api_cancel_restores_the_window()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  set_unpeeked_options()
+  local win = vim.api.nvim_get_current_win()
+
+  local peek = numb.peek(0, 30)
+  peek:update(12)
+  -- Without this the restoration below could hold because nothing was applied.
+  assert(vim.wo[win].number == true, "precondition: peek options were applied")
+  assert_cursor(12, "precondition: the cursor was moved")
+
+  local cancelled = peek:cancel()
+
+  assert(cancelled == true, ("cancel() on an active peek must return true, got %s"):format(tostring(cancelled)))
+  assert_unpeeked_options(win, "cancel()")
+  assert_cursor(1, "cancel() returns the cursor to the origin, not to an intermediate target")
+  assert(vim.w[win].numb_peeking == nil, "cancel() clears the peeking flag")
+  assert(not numb.is_peeking(), "is_peeking() is false after cancel()")
+  assert(not peek:is_active(), "the handle is inactive after cancel()")
+  assert(vim.tbl_isempty(numb._state.win_states), "cancel() leaves no saved state")
+end
+
+function Tests.api_update_with_a_range_highlights_it()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local bufnr = vim.api.nvim_get_current_buf()
+
+  local peek = numb.peek(0, 12)
+  assert(highlighted_range(bufnr) == nil, "precondition: a peek without a range highlights nothing")
+
+  peek:update(5, { range = { 5, 10 } })
+  local range = highlighted_range(bufnr)
+  assert(range ~= nil, "update() with opts.range must highlight the range")
+  assert(range.count == 1, ("a range must be exactly one extmark, found %d"):format(range.count))
+  assert(range[1] == 5 and range[2] == 10, ("expected range 5..10, got %d..%d"):format(range[1], range[2]))
+  assert_cursor(5, "the target line is still peeked")
+
+  peek:cancel()
+  assert(highlighted_range(bufnr) == nil, "cancel() clears the range highlight")
+end
+
+function Tests.api_accept_stays_at_the_target_immediately()
+  local numb = configure()
+  reset_buffer()
+  drain_scheduled(50)
+  vim.cmd "clearjumps"
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  set_unpeeked_options()
+  local win = vim.api.nvim_get_current_win()
+
+  local peek = numb.peek(0, 30)
+  assert_cursor(30, "precondition: the peek moved the cursor to 30")
+  local accepted = peek:accept()
+
+  -- Deliberately no drain_scheduled(): the API jump is not deferred.
+  assert(accepted == true, ("accept() on an active peek must return true, got %s"):format(tostring(accepted)))
+  assert_cursor(30, "accept() stays at the target at once")
+  assert_unpeeked_options(win, "accept()")
+  assert(vim.w[win].numb_peeking == nil, "accept() clears the peeking flag")
+  assert(not peek:is_active(), "the handle is inactive after accept()")
+  assert(vim.tbl_isempty(numb._state.win_states), "accept() leaves no saved state")
+
+  -- A scheduled restore arriving late would undo the jump.
+  drain_scheduled()
+  assert_cursor(30, "nothing deferred moves the cursor after accept()")
+
+  vim.cmd "normal! \15"
+  assert_cursor(1, "<C-o> after accept() returns to the origin")
+end
+
+function Tests.api_second_peek_takes_over_the_first()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+  local first = numb.peek(0, 10)
+  assert(first:is_active(), "precondition: the first peek was active")
+  local second = numb.peek(0, 20)
+
+  assert(not first:is_active(), "a new peek deactivates the previous handle")
+  assert(second:is_active(), "the new peek is active")
+  assert_cursor(20, "the new peek moved the cursor")
+
+  assert(first:update(5) == false, "update() on a superseded handle returns false")
+  assert_cursor(20, "update() on a superseded handle does not move the cursor")
+  assert(first:cancel() == false, "cancel() on a superseded handle returns false")
+  assert(first:accept() == false, "accept() on a superseded handle returns false")
+  assert(second:is_active(), "the superseded handle cannot end the active peek")
+  assert_cursor(20, "the active peek is untouched by the superseded handle")
+
+  second:cancel()
+  -- The takeover must not record the first peek's target as the origin.
+  assert_cursor(1, "cancelling the second peek returns to the line before the first one")
+end
+
+function Tests.api_command_line_takes_over_an_api_peek()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+  local peek = numb.peek(0, 30)
+  assert_cursor(30, "precondition: the API peek moved the cursor")
+  local observed = probe_cmdline ":12"
+
+  assert(observed.peeking and observed.line == 12, "the command line peek must have replaced the API peek")
+  assert(not peek:is_active(), "the command line peek deactivates the API handle")
+  assert_cursor(1, "aborting the command line returns to the line before the API peek")
+  assert(not numb.is_peeking(), "nothing is peeking after the command line is abandoned")
+  assert(vim.tbl_isempty(numb._state.win_states), "no saved state is left behind")
+end
+
+function Tests.api_peek_survives_a_command_line_that_addresses_nothing()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  vim.g.numb_api_probe = nil
+
+  local peek = numb.peek(0, 30)
+  run_cmd ":let g:numb_api_probe = 1\r"
+  drain_scheduled()
+  local probe = vim.g.numb_api_probe
+  vim.g.numb_api_probe = nil
+
+  -- Proves the command line really opened and ran, so leaving it was exercised.
+  assert(probe == 1, "precondition: the command must have run")
+  assert(peek:is_active(), "a command line that peeks nothing must not end an API peek")
+  assert_cursor(30, "the API peek keeps its target")
+
+  peek:cancel()
+  assert_cursor(1, "the API peek still restores its own origin")
+end
+
+function Tests.api_disable_cancels_an_active_peek()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  set_unpeeked_options()
+  local win = vim.api.nvim_get_current_win()
+
+  local peek = numb.peek(0, 25)
+  assert(peek:is_active(), "precondition: the peek was active before disable()")
+  numb.disable()
+
+  assert(not peek:is_active(), "disable() deactivates the API handle")
+  assert_unpeeked_options(win, "disable()")
+  assert_cursor(1, "disable() returns the cursor to the origin")
+  assert(vim.w[win].numb_peeking == nil, "disable() clears the peeking flag")
+
+  numb.enable()
+end
+
+function Tests.api_peek_while_disabled_returns_an_inactive_handle()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  numb.disable()
+  assert(not numb.is_enabled(), "precondition: the plugin is disabled")
+
+  local peek = numb.peek(0, 10)
+
+  assert(peek ~= nil, "peek() while disabled still returns a handle")
+  assert(not peek:is_active(), "the handle is inactive while disabled")
+  assert_cursor(1, "peek() while disabled does not move the cursor")
+  assert(vim.w.numb_peeking == nil, "peek() while disabled does not set the flag")
+  assert(peek:cancel() == false, "cancel() on the inactive handle returns false")
+
+  numb.enable()
+end
+
+function Tests.api_peek_rejects_bad_arguments()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  -- A valid call first: without it, calling a missing function would also make
+  -- every pcall below return false and the test would pass for the wrong reason.
+  numb.peek(0, 10):cancel()
+  assert_cursor(1, "precondition: the valid peek was cancelled")
+
+  local cases = {
+    { "an invalid window", { 999999, 10 } },
+    { "a non-numeric line", { 0, "ten" } },
+    { "a non-table range", { 0, 10, { range = "x" } } },
+  }
+  for _, case in ipairs(cases) do
+    local label, args = case[1], case[2]
+    local ok = pcall(numb.peek, unpack(args, 1, 3))
+    assert(not ok, ("peek() must raise for %s"):format(label))
+    assert(not numb.is_peeking(), ("%s must not leave a peek behind"):format(label))
+    assert_cursor(1, ("%s must not move the cursor"):format(label))
+  end
+  assert(vim.tbl_isempty(numb._state.win_states), "rejected calls leave no saved state")
+end
+
+function Tests.api_peek_ignores_disable_for_filetype()
+  local numb = configure { disable_for_filetype = { "lua" } }
+  reset_buffer()
+  vim.bo.filetype = "lua"
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local observed = probe_cmdline ":10"
+  assert(not observed.peeking, "precondition: the filter blocks the command line in this buffer")
+
+  local peek = numb.peek(0, 10)
+
+  assert(peek:is_active(), "the filter must not block an explicit API peek")
+  assert_cursor(10, "the API peek moved the cursor")
+
+  peek:cancel()
+end
+
+function Tests.api_peek_in_a_window_that_is_not_current()
+  local numb = configure()
+  reset_buffer()
+  local peeked_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(peeked_win, { 1, 0 })
+  local current_win = create_split()
+  assert(current_win ~= peeked_win, "precondition: the split is a different window")
+  assert(vim.api.nvim_get_current_win() ~= peeked_win, "precondition: the peeked window is not current")
+  local topline_before = pin_topline(current_win, 40)
+  assert(topline_before > 1, ("precondition: the current window is scrolled, topline %d"):format(topline_before))
+  local current_line = cursor_of(current_win)
+  assert(current_line ~= 30, "precondition: the current window is not already on the target")
+
+  local peek = numb.peek(peeked_win, 30)
+
+  assert(peek:is_active(), "a peek in a background window is active")
+  assert(cursor_of(peeked_win) == 30, "the peeked window's cursor moves")
+  assert(cursor_of(current_win) == current_line, "the current window's cursor does not move")
+  assert(topline_of(current_win) == topline_before, "the current window does not scroll")
+  assert(vim.api.nvim_get_current_win() == current_win, "peeking does not change the current window")
+
+  assert(peek:cancel() == true, "cancel() on the background peek returns true")
+  assert(cursor_of(peeked_win) == 1, "cancel() restores the background window's cursor")
+  assert(vim.w[peeked_win].numb_peeking == nil, "cancel() clears the background window's flag")
+
+  close_other_windows()
+end
+
+function Tests.api_peeked_window_closed_mid_peek()
+  local numb = configure()
+  reset_buffer()
+  local peeked_win = create_split()
+  local peek = numb.peek(peeked_win, 20)
+  assert(peek:is_active(), "precondition: the peek was active before the window closed")
+
+  vim.cmd "wincmd p"
+  vim.api.nvim_win_close(peeked_win, true)
+  assert(not vim.api.nvim_win_is_valid(peeked_win), "precondition: the window is gone")
+
+  assert(not peek:is_active(), "closing the window deactivates the handle")
+  for _, method in ipairs { "update", "accept", "cancel" } do
+    local ok, result = pcall(peek[method], peek, 10)
+    assert(ok, ("%s() on a closed window must not raise: %s"):format(method, tostring(result)))
+    assert(result == false, ("%s() on a closed window returns false, got %s"):format(method, tostring(result)))
+  end
+  assert(numb._state.win_states[peeked_win] == nil, "no saved state is left for the closed window")
+
+  close_other_windows()
+end
+
+function Tests.api_peek_clamps_the_line_to_the_buffer()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+  local peek = numb.peek(0, 9999)
+
+  assert(peek:is_active(), "an out of range line still peeks")
+  assert_cursor(40, "peek(0, 9999) lands on the last line")
+
+  peek:cancel()
+end
+
+-- Record every `User NumbPeek` and `User NumbUnpeek` fired while `fn` runs. The
+-- augroup is deleted even when `fn` fails, so a broken run leaks no listener.
+local function record_peek_events(fn)
+  local events = {}
+  local group = vim.api.nvim_create_augroup("numb_test_api_events", { clear = true })
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = { "NumbPeek", "NumbUnpeek" },
+    callback = function(ev)
+      table.insert(events, { name = ev.match, data = ev.data })
+    end,
+  })
+  local ok, err = pcall(fn, events)
+  vim.api.nvim_del_augroup_by_id(group)
+  if not ok then
+    error(err, 0)
+  end
+end
+
+local function events_named(events, name)
+  local matching = {}
+  for _, event in ipairs(events) do
+    if event.name == name then
+      table.insert(matching, event)
+    end
+  end
+  return matching
+end
+
+local function clear_events(events)
+  for index = #events, 1, -1 do
+    events[index] = nil
+  end
+end
+
+function Tests.api_peek_and_update_fire_numb_peek()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local win = vim.api.nvim_get_current_win()
+
+  record_peek_events(function(events)
+    local peek = numb.peek(0, 30)
+    local peeked = events_named(events, "NumbPeek")
+    assert(
+      #events == 1 and #peeked == 1,
+      ("peek() fires NumbPeek once and nothing else, got %d events"):format(#events)
+    )
+    local data = peeked[1].data
+    assert(data ~= nil, "NumbPeek carries data")
+    assert(
+      data.win == win,
+      ("data.win is the window handle, not 0: expected %d, got %s"):format(win, tostring(data.win))
+    )
+    assert(data.line == 30, ("data.line is the target, got %s"):format(tostring(data.line)))
+    assert(data.range == nil, "a peek without a range reports no range")
+
+    clear_events(events)
+    peek:update(12, { range = { 5, 10 } })
+    peeked = events_named(events, "NumbPeek")
+    assert(#peeked == 1, ("update() fires NumbPeek once, got %d"):format(#peeked))
+    assert(#events_named(events, "NumbUnpeek") == 0, "update() moves the peek without ending it")
+    data = peeked[1].data
+    assert(data.win == win, "update() reports the same window")
+    assert(data.line == 12, ("update() reports the new line, got %s"):format(tostring(data.line)))
+    assert(
+      data.range and data.range[1] == 5 and data.range[2] == 10,
+      ("update() reports the range 5..10, got %s"):format(vim.inspect(data.range))
+    )
+
+    peek:cancel()
+  end)
+end
+
+function Tests.api_cancel_and_accept_fire_numb_unpeek_once()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local win = vim.api.nvim_get_current_win()
+
+  record_peek_events(function(events)
+    local cancelled = numb.peek(0, 30)
+    clear_events(events)
+    cancelled:cancel()
+    local unpeeked = events_named(events, "NumbUnpeek")
+    assert(#events == 1 and #unpeeked == 1, ("cancel() fires NumbUnpeek exactly once, got %d events"):format(#events))
+    assert(unpeeked[1].data.win == win, "NumbUnpeek reports the window handle")
+    assert(unpeeked[1].data.accepted == false, "cancel() reports accepted == false")
+
+    clear_events(events)
+    assert(cancelled:cancel() == false, "cancel() again on the inactive handle returns false")
+    assert(#events == 0, ("an inactive handle fires nothing, got %d events"):format(#events))
+
+    local accepted = numb.peek(0, 30)
+    clear_events(events)
+    accepted:accept()
+    unpeeked = events_named(events, "NumbUnpeek")
+    assert(#events == 1 and #unpeeked == 1, ("accept() fires NumbUnpeek exactly once, got %d events"):format(#events))
+    assert(unpeeked[1].data.accepted == true, "accept() reports accepted == true")
+  end)
+end
+
+function Tests.api_takeover_fires_numb_unpeek_for_the_old_peek()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+  record_peek_events(function(events)
+    local first = numb.peek(0, 10)
+    clear_events(events)
+    local second = numb.peek(0, 20)
+
+    assert(#events == 2, ("a takeover fires one NumbUnpeek and one NumbPeek, got %d events"):format(#events))
+    assert(events[1].name == "NumbUnpeek", "the old peek ends before the new one starts")
+    assert(events[1].data.accepted == false, "the superseded peek was not accepted")
+    assert(events[2].name == "NumbPeek" and events[2].data.line == 20, "then the new peek starts on line 20")
+    assert(not first:is_active(), "precondition: the first handle really was superseded")
+
+    second:cancel()
+  end)
+end
+
+-- Run `fn` with a `User` listener for `pattern` installed. The augroup is deleted
+-- even when `fn` fails, so a re-entrant callback cannot leak into later tests.
+local function with_user_listener(pattern, callback, fn)
+  local group = vim.api.nvim_create_augroup("numb_test_api_listener", { clear = true })
+  vim.api.nvim_create_autocmd("User", { group = group, pattern = pattern, callback = callback })
+  local ok, err = pcall(fn)
+  vim.api.nvim_del_augroup_by_id(group)
+  if not ok then
+    error(err, 0)
+  end
+end
+
+-- Every window that still carries the peeking flag, whoever set it.
+local function peeking_windows()
+  local wins = {}
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.w[win].numb_peeking ~= nil then
+      table.insert(wins, win)
+    end
+  end
+  return wins
+end
+
+-- The windows `win_states` holds saved state for, sorted so it compares.
+local function saved_windows(numb)
+  local wins = vim.tbl_keys(numb._state.win_states)
+  table.sort(wins)
+  return wins
+end
+
+-- How many NumbPeek and NumbUnpeek events each window got, so a peek that was
+-- opened and never ended shows up as an imbalance on its own window.
+local function event_balance(events)
+  local balance = {}
+  for _, event in ipairs(events) do
+    local win = event.data.win
+    balance[win] = balance[win] or { peeks = 0, unpeeks = 0 }
+    if event.name == "NumbPeek" then
+      balance[win].peeks = balance[win].peeks + 1
+    else
+      balance[win].unpeeks = balance[win].unpeeks + 1
+    end
+  end
+  return balance
+end
+
+function Tests.api_peek_rejects_non_integer_arguments()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  set_unpeeked_options()
+  local win = vim.api.nvim_get_current_win()
+  -- A valid call first, for the same reason as in api_peek_rejects_bad_arguments.
+  numb.peek(0, 10):cancel()
+  assert_cursor(1, "precondition: the valid peek was cancelled")
+  assert_unpeeked_options(win, "precondition: the valid peek was restored")
+
+  -- Each of these is a number, so the type check alone lets it through. The
+  -- window API then truncates or rejects it only after the window was changed.
+  local cases = {
+    { "a fractional line", { 0, 10.5 } },
+    { "a NaN line", { 0, 0 / 0 } },
+    { "a fractional window", { 0.5, 3 } },
+    { "a fractional range bound", { 0, 3, { range = { 1.5, 4 } } } },
+  }
+  for _, case in ipairs(cases) do
+    local label, args = case[1], case[2]
+    local ok = pcall(numb.peek, unpack(args, 1, 3))
+    assert(not ok, ("peek() must raise for %s"):format(label))
+    assert(
+      vim.tbl_isempty(numb._state.win_states),
+      ("%s must leave no saved state, found %s"):format(label, vim.inspect(saved_windows(numb)))
+    )
+    assert(not numb.is_peeking(), ("%s must not leave a peek behind"):format(label))
+    assert(vim.w[win].numb_peeking == nil, ("%s must not set the peeking flag"):format(label))
+    assert_unpeeked_options(win, label)
+    assert_cursor(1, ("%s must not move the cursor"):format(label))
+  end
+end
+
+function Tests.api_update_rejects_a_non_integer_line_and_keeps_the_peek()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  set_unpeeked_options()
+  local win = vim.api.nvim_get_current_win()
+
+  local peek = numb.peek(0, 30)
+  assert_cursor(30, "precondition: the peek started at 30")
+
+  local ok = pcall(peek.update, peek, 7.5)
+
+  assert(not ok, "update(7.5) must raise")
+  assert(peek:is_active(), "a rejected update() leaves the handle active")
+  assert_cursor(30, "a rejected update() leaves the previous peek on screen")
+  assert(vim.w[win].numb_peeking == true, "a rejected update() keeps the peeking flag")
+  assert(vim.wo[win].number == true, "a rejected update() keeps the peek options")
+  assert(vim.wo[win].foldenable == false, "a rejected update() keeps folds disabled")
+  local saved = numb._state.win_states[win]
+  assert(saved ~= nil, "a rejected update() keeps the saved state")
+  assert(saved.cursor[1] == 1, ("the saved origin is still line 1, got %d"):format(saved.cursor[1]))
+
+  assert(peek:cancel() == true, "the peek can still be cancelled after a rejected update()")
+  assert_cursor(1, "cancel() after a rejected update() returns to the origin")
+  assert_unpeeked_options(win, "cancel() after a rejected update()")
+end
+
+-- Expected outcome: `second` is the one live peek. Opening a peek ends whatever
+-- is live at the moment it takes over, and that includes a peek a `NumbUnpeek`
+-- listener opened while the previous one was being ended. So the nested peek in
+-- win_b is ended again, with its own NumbUnpeek, before `second` goes live, and
+-- win_b is back to how it was.
+function Tests.api_peek_opened_by_a_listener_during_a_takeover_does_not_leak()
+  local numb = configure()
+  reset_buffer()
+  local win_a = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(win_a, { 1, 0 })
+  set_unpeeked_options()
+  local win_b = create_split()
+  vim.api.nvim_win_set_cursor(win_b, { 1, 0 })
+  set_unpeeked_options()
+  vim.api.nvim_set_current_win(win_a)
+
+  local nested
+  local listener_runs = 0
+  with_user_listener("NumbUnpeek", function()
+    listener_runs = listener_runs + 1
+    if listener_runs == 1 then
+      nested = numb.peek(win_b, 33)
+    end
+  end, function()
+    record_peek_events(function(events)
+      local first = numb.peek(win_a, 10)
+      local second = numb.peek(win_a, 20)
+
+      assert(nested ~= nil, "precondition: the takeover fired NumbUnpeek and the listener opened a peek")
+      local nested_peeks = vim.tbl_filter(function(event)
+        return event.data.win == win_b
+      end, events_named(events, "NumbPeek"))
+      assert(#nested_peeks == 1, "precondition: the nested peek really started in win_b")
+
+      assert(not first:is_active(), "the first peek was superseded")
+      assert(second:is_active(), "the outer peek is the live one")
+      assert(not nested:is_active(), "the nested peek was ended by the takeover it ran inside")
+      assert(cursor_of(win_a) == 20, "the live peek shows line 20")
+      assert(cursor_of(win_b) == 1, ("the nested peek's window is restored, cursor on %d"):format(cursor_of(win_b)))
+      local flagged = peeking_windows()
+      assert(
+        #flagged == 1 and flagged[1] == win_a,
+        ("only the live peek's window is flagged, found %s"):format(vim.inspect(flagged))
+      )
+      assert(
+        vim.deep_equal(saved_windows(numb), { win_a }),
+        ("win_states holds only the live peek, found %s"):format(vim.inspect(saved_windows(numb)))
+      )
+      assert_unpeeked_options(win_b, "the nested peek's window")
+
+      assert(second:cancel() == true, "the live peek can be cancelled")
+      local balance = event_balance(events)
+      for win, counts in pairs(balance) do
+        assert(
+          counts.peeks == counts.unpeeks,
+          ("window %d got %d NumbPeek but %d NumbUnpeek"):format(win, counts.peeks, counts.unpeeks)
+        )
+      end
+      assert(#events_named(events, "NumbPeek") == 3, "three peeks started: first, nested and second")
+    end)
+  end)
+
+  numb.disable()
+  numb.enable()
+  assert(#peeking_windows() == 0, ("no window keeps the flag, found %s"):format(vim.inspect(peeking_windows())))
+  assert(vim.tbl_isempty(numb._state.win_states), "no saved state is left behind")
+  assert_unpeeked_options(win_a, "win_a after disable()")
+  assert_unpeeked_options(win_b, "win_b after disable()")
+  assert(cursor_of(win_a) == 1, "win_a is back on its origin")
+  assert(cursor_of(win_b) == 1, "win_b is back on its origin")
+
+  close_other_windows()
+end
+
+function Tests.api_peek_opened_by_a_listener_during_disable_does_not_leak()
+  local numb = configure()
+  reset_buffer()
+  local win_a = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(win_a, { 1, 0 })
+  set_unpeeked_options()
+  local win_b = create_split()
+  vim.api.nvim_win_set_cursor(win_b, { 1, 0 })
+  set_unpeeked_options()
+  vim.api.nvim_set_current_win(win_a)
+
+  local nested
+  local listener_runs = 0
+  with_user_listener("NumbUnpeek", function()
+    listener_runs = listener_runs + 1
+    if listener_runs == 1 then
+      nested = numb.peek(win_b, 33)
+    end
+  end, function()
+    record_peek_events(function(events)
+      local peek = numb.peek(win_a, 10)
+      clear_events(events)
+      numb.disable()
+
+      assert(nested ~= nil, "precondition: disable() fired NumbUnpeek and the listener called peek()")
+      assert(not numb.is_enabled(), "precondition: the plugin is disabled")
+      assert(not peek:is_active(), "disable() ended the peek")
+      assert(not nested:is_active(), "a peek() made while disabling returns an inactive handle")
+      assert(
+        #events_named(events, "NumbPeek") == 0,
+        "a peek() made while disabling peeks nothing, so it fires no NumbPeek"
+      )
+      assert(#peeking_windows() == 0, ("no window keeps the flag, found %s"):format(vim.inspect(peeking_windows())))
+      assert(vim.tbl_isempty(numb._state.win_states), "no saved state is left after disable()")
+      assert(cursor_of(win_b) == 1, "win_b was never moved")
+      assert_unpeeked_options(win_a, "win_a after disable()")
+      assert_unpeeked_options(win_b, "win_b after disable()")
+    end)
+  end)
+
+  numb.enable()
+  close_other_windows()
+end
+
+-- A 2-line scratch buffer to switch the peeked window to. The peek origin sits on
+-- line 30, which does not exist there.
+local function two_line_scratch()
+  local scratch = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(scratch, 0, -1, false, { "one", "two" })
+  return scratch
+end
+
+-- Run `fn` with the global values of the peek-affected options set the way a peek
+-- sets them. A buffer shown in a window for the first time takes those global
+-- values, so after switching buffers the window looks peeked until numb puts the
+-- saved local values back, which is what makes the restore observable. The
+-- globals are put back even when `fn` fails.
+local function with_peek_like_globals(fn)
+  local saved = {}
+  local peek_like = { number = true, cursorline = true, relativenumber = false, foldenable = false }
+  for option, value in pairs(peek_like) do
+    saved[option] = vim.go[option]
+    vim.go[option] = value
+  end
+  local ok, err = pcall(fn)
+  for option, value in pairs(saved) do
+    vim.go[option] = value
+  end
+  if not ok then
+    error(err, 0)
+  end
+end
+
+function Tests.api_cancel_after_the_peeked_window_switched_buffer()
+  local numb = configure()
+  reset_buffer()
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(win, { 30, 0 })
+  set_unpeeked_options()
+  local scratch = two_line_scratch()
+
+  with_peek_like_globals(function()
+    record_peek_events(function(events)
+      local peek = numb.peek(0, 5)
+      assert_cursor(5, "precondition: the peek moved the cursor to 5")
+      vim.api.nvim_win_set_buf(win, scratch)
+      assert(vim.wo[win].number == true, "precondition: the switch shows peek options, so restoring is observable")
+      clear_events(events)
+
+      local ok, result = pcall(peek.cancel, peek)
+
+      assert(ok, ("cancel() after a buffer switch must not raise: %s"):format(tostring(result)))
+      assert(result == true, ("cancel() after a buffer switch returns true, got %s"):format(tostring(result)))
+      local unpeeked = events_named(events, "NumbUnpeek")
+      assert(#unpeeked == 1, ("cancel() fires exactly one NumbUnpeek, got %d"):format(#unpeeked))
+      assert(unpeeked[1].data.accepted == false, "cancel() reports accepted == false")
+      assert_unpeeked_options(win, "cancel() after a buffer switch")
+      assert(vim.w[win].numb_peeking == nil, "cancel() clears the peeking flag")
+      assert(vim.tbl_isempty(numb._state.win_states), "cancel() leaves no saved state")
+      assert(not peek:is_active(), "the handle is inactive after cancel()")
+      assert(vim.api.nvim_win_get_buf(win) == scratch, "the window stays on the buffer it was switched to")
+      local line = cursor_of(win)
+      assert(line >= 1 and line <= 2, ("the cursor is inside the 2-line buffer, got %d"):format(line))
+    end)
+  end)
+end
+
+function Tests.api_accept_after_the_peeked_window_switched_buffer()
+  local numb = configure()
+  reset_buffer()
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(win, { 30, 0 })
+  set_unpeeked_options()
+  local scratch = two_line_scratch()
+
+  with_peek_like_globals(function()
+    record_peek_events(function(events)
+      local peek = numb.peek(0, 5)
+      assert_cursor(5, "precondition: the peek moved the cursor to 5")
+      vim.api.nvim_win_set_buf(win, scratch)
+      assert(vim.wo[win].number == true, "precondition: the switch shows peek options, so restoring is observable")
+      local line_after_switch = cursor_of(win)
+      assert(
+        line_after_switch == 1,
+        ("precondition: the switch put the cursor on line 1, got %d"):format(line_after_switch)
+      )
+      clear_events(events)
+
+      local ok, result = pcall(peek.accept, peek)
+
+      assert(ok, ("accept() after a buffer switch must not raise: %s"):format(tostring(result)))
+      local unpeeked = events_named(events, "NumbUnpeek")
+      assert(#unpeeked == 1, ("accept() fires exactly one NumbUnpeek, got %d"):format(#unpeeked))
+      assert(unpeeked[1].data.accepted == true, "accept() reports accepted == true")
+      assert_unpeeked_options(win, "accept() after a buffer switch")
+      assert(vim.w[win].numb_peeking == nil, "accept() clears the peeking flag")
+      assert(vim.tbl_isempty(numb._state.win_states), "accept() leaves no saved state")
+      assert(vim.api.nvim_win_get_buf(win) == scratch, "the window stays on the buffer it was switched to")
+      -- Line 5 of the old buffer clamps to line 2 here, so a jump into it would
+      -- show up as the cursor moving.
+      drain_scheduled()
+      assert(
+        cursor_of(win) == line_after_switch,
+        ("accept() must not jump into a buffer it never peeked, cursor moved to %d"):format(cursor_of(win))
+      )
+    end)
+  end)
+end
+
+function Tests.api_peek_opened_while_the_command_line_confirms_survives_its_jump()
+  local numb = configure()
+  reset_buffer()
+  drain_scheduled(50)
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+  local cmdline_unpeek
+  local api_peek
+  with_user_listener("NumbUnpeek", function(ev)
+    if cmdline_unpeek == nil then
+      cmdline_unpeek = ev.data
+      api_peek = numb.peek(0, 5)
+    end
+  end, function()
+    run_cmd ":30\r"
+    drain_scheduled()
+  end)
+
+  assert(cmdline_unpeek ~= nil, "precondition: the command line peek fired NumbUnpeek")
+  assert(cmdline_unpeek.accepted == true, "precondition: the command line peek was accepted")
+  assert(cmdline_unpeek.line == 30, ("precondition: the command line peeked 30, got %s"):format(cmdline_unpeek.line))
+  assert(api_peek ~= nil, "precondition: the listener opened the API peek")
+  assert(api_peek:is_active(), "the API peek opened after the command line is still live")
+  assert_cursor(5, "the deferred command line jump must not replace the API peek on screen")
+
+  assert(api_peek:cancel() == true, "the API peek can be cancelled")
+  assert_cursor(30, "cancelling returns to where the confirmed command left the cursor")
+end
+
+function Tests.api_peeked_window_closed_without_autocommands()
+  local numb = configure()
+  reset_buffer()
+  local peeked_win = create_split()
+
+  record_peek_events(function(events)
+    local peek = numb.peek(peeked_win, 20)
+    assert(peek:is_active(), "precondition: the peek was active before the window closed")
+    vim.cmd "wincmd p"
+    clear_events(events)
+    vim.cmd(("noautocmd call nvim_win_close(%d, v:true)"):format(peeked_win))
+    assert(not vim.api.nvim_win_is_valid(peeked_win), "precondition: the window is gone")
+    assert(#events == 0, "precondition: no WinClosed ran, so nothing has ended the peek yet")
+
+    assert(not peek:is_active(), "a window closed without WinClosed deactivates the handle")
+    for _, method in ipairs { "update", "accept", "cancel" } do
+      local ok, result = pcall(peek[method], peek, 3)
+      assert(ok, ("%s() on a silently closed window must not raise: %s"):format(method, tostring(result)))
+      assert(
+        result == false,
+        ("%s() on a silently closed window returns false, got %s"):format(method, tostring(result))
+      )
+    end
+    local unpeeked = events_named(events, "NumbUnpeek")
+    assert(#events == 1 and #unpeeked == 1, ("exactly one NumbUnpeek in total, got %d events"):format(#events))
+    assert(unpeeked[1].data.accepted == false, "the closed window's peek was not accepted")
+    assert(unpeeked[1].data.win == peeked_win, "NumbUnpeek reports the closed window")
+    assert(numb._state.win_states[peeked_win] == nil, "no saved state is left for the closed window")
+  end)
+
+  close_other_windows()
+end
+
+function Tests.api_command_line_fires_peek_events()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local win = vim.api.nvim_get_current_win()
+
+  record_peek_events(function(events)
+    run_cmd ":12\r"
+    drain_scheduled()
+    assert_cursor(12, "precondition: the confirmed command line landed on 12")
+    local peeked = events_named(events, "NumbPeek")
+    assert(#peeked >= 1, "the command line fires NumbPeek")
+    assert(peeked[#peeked].data.line == 12, ("the last NumbPeek is line 12, got %s"):format(peeked[#peeked].data.line))
+    assert(peeked[#peeked].data.win == win, "NumbPeek reports the current window")
+    local unpeeked = events_named(events, "NumbUnpeek")
+    assert(#unpeeked == 1, ("a confirmed command line fires one NumbUnpeek, got %d"):format(#unpeeked))
+    assert(unpeeked[1].data.accepted == true, "a confirmed command line reports accepted == true")
+    assert(unpeeked[1].data.win == win, "NumbUnpeek reports the current window")
+
+    clear_events(events)
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+    local observed = probe_cmdline ":12"
+    assert(observed.peeking, "precondition: the abandoned command line peeked")
+    assert(#events_named(events, "NumbPeek") >= 1, "the abandoned command line fired NumbPeek")
+    unpeeked = events_named(events, "NumbUnpeek")
+    assert(#unpeeked == 1, ("an abandoned command line fires one NumbUnpeek, got %d"):format(#unpeeked))
+    assert(unpeeked[1].data.accepted == false, "an abandoned command line reports accepted == false")
+    assert_cursor(1, "the abandoned command line returned to the origin")
+  end)
+end
+
+function Tests.api_closing_a_peeked_window_fires_one_numb_unpeek()
+  local numb = configure()
+  reset_buffer()
+  local peeked_win = create_split()
+
+  record_peek_events(function(events)
+    local peek = numb.peek(peeked_win, 20)
+    vim.cmd "wincmd p"
+    clear_events(events)
+    vim.api.nvim_win_close(peeked_win, true)
+
+    local unpeeked = events_named(events, "NumbUnpeek")
+    assert(#events == 1 and #unpeeked == 1, ("closing the window fires one NumbUnpeek, got %d events"):format(#events))
+    assert(unpeeked[1].data.accepted == false, "a closed window's peek was not accepted")
+    assert(unpeeked[1].data.win == peeked_win, "NumbUnpeek reports the closed window")
+
+    peek:update(3)
+    peek:accept()
+    peek:cancel()
+    assert(#events == 1, ("the handle fires nothing more after its window closed, got %d events"):format(#events))
+  end)
+
+  close_other_windows()
+end
+
+function Tests.api_disable_fires_one_numb_unpeek()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local win = vim.api.nvim_get_current_win()
+
+  record_peek_events(function(events)
+    local peek = numb.peek(0, 25)
+    assert(peek:is_active(), "precondition: the peek was active before disable()")
+    clear_events(events)
+    numb.disable()
+
+    local unpeeked = events_named(events, "NumbUnpeek")
+    assert(#events == 1 and #unpeeked == 1, ("disable() fires one NumbUnpeek, got %d events"):format(#events))
+    assert(unpeeked[1].data.accepted == false, "disable() reports accepted == false")
+    assert(unpeeked[1].data.win == win, "NumbUnpeek reports the peeked window")
+  end)
+
+  numb.enable()
+end
+
+function Tests.api_range_is_drawn_even_with_range_peek_off()
+  local numb = configure { range_peek = false }
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local bufnr = vim.api.nvim_get_current_buf()
+
+  local observed = probe_cmdline ":5,10"
+  assert(observed.peeking, "precondition: the command line still peeks a range")
+  assert(observed.range == nil, "precondition: range_peek = false keeps the command line from highlighting")
+
+  local peek = numb.peek(0, 12, { range = { 5, 10 } })
+  local range = highlighted_range(bufnr)
+  assert(range ~= nil, "an explicit API range is drawn whatever range_peek says")
+  assert(range[1] == 5 and range[2] == 10, ("expected range 5..10, got %d..%d"):format(range[1], range[2]))
+  assert(range.count == 1, ("a range must be exactly one extmark, found %d"):format(range.count))
+
+  peek:cancel()
+  assert(highlighted_range(bufnr) == nil, "cancel() clears the range")
+end
+
+function Tests.api_update_without_a_range_clears_the_highlight()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local bufnr = vim.api.nvim_get_current_buf()
+
+  local peek = numb.peek(0, 12, { range = { 5, 10 } })
+  local range = highlighted_range(bufnr)
+  assert(range ~= nil, "peek() with opts.range highlights at open time")
+  assert(range[1] == 5 and range[2] == 10, ("expected range 5..10, got %d..%d"):format(range[1], range[2]))
+
+  peek:update(12)
+
+  assert(peek:is_active(), "the handle stays active")
+  assert_cursor(12, "the target line is still peeked")
+  assert(highlighted_range(bufnr) == nil, "update() without opts.range clears the previous range")
+
+  peek:cancel()
+end
+
+function Tests.api_accept_in_a_background_window_keeps_the_current_window()
+  local numb = configure()
+  reset_buffer()
+  local peeked_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_cursor(peeked_win, { 1, 0 })
+  local current_win = create_split()
+  vim.api.nvim_win_set_cursor(current_win, { 3, 0 })
+  assert(vim.api.nvim_get_current_win() ~= peeked_win, "precondition: the peeked window is not current")
+
+  local peek = numb.peek(peeked_win, 30)
+  assert(peek:accept() == true, "accept() on the background peek returns true")
+
+  assert(vim.api.nvim_get_current_win() == current_win, "accept() leaves the current window current")
+  assert(cursor_of(peeked_win) == 30, ("the peeked window lands on the target, got %d"):format(cursor_of(peeked_win)))
+  assert(cursor_of(current_win) == 3, "the current window's cursor does not move")
+  assert(vim.w[peeked_win].numb_peeking == nil, "accept() clears the background window's flag")
+
+  close_other_windows()
+end
+
+function Tests.api_event_range_is_a_copy()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local bufnr = vim.api.nvim_get_current_buf()
+
+  local mutations = 0
+  with_user_listener("NumbPeek", function(ev)
+    if ev.data and ev.data.range then
+      ev.data.range[1] = 999
+      mutations = mutations + 1
+    end
+  end, function()
+    record_peek_events(function(events)
+      local peek = numb.peek(0, 12, { range = { 5, 10 } })
+      assert(mutations == 1, "precondition: the listener mutated the range it was handed")
+      local range = highlighted_range(bufnr)
+      assert(range and range[1] == 5 and range[2] == 10, "a listener's mutation does not change what is drawn")
+
+      clear_events(events)
+      peek:update(12, { range = { 5, 10 } })
+      local peeked = events_named(events, "NumbPeek")
+      assert(#peeked == 1, "precondition: update() fired NumbPeek")
+      local reported = peeked[1].data.range
+      assert(
+        reported and reported[1] == 5 and reported[2] == 10,
+        ("the next event reports 5..10, got %s"):format(vim.inspect(reported))
+      )
+
+      clear_events(events)
+      peek:cancel()
+      reported = events_named(events, "NumbUnpeek")[1].data.range
+      assert(
+        reported and reported[1] == 5 and reported[2] == 10,
+        ("NumbUnpeek reports 5..10 despite the mutation, got %s"):format(vim.inspect(reported))
+      )
+    end)
+  end)
+end
+
+function Tests.api_handle_does_not_expose_the_command_line_accept()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+  local peek = numb.peek(0, 10)
+  assert(peek:is_active(), "precondition: the handle is live")
+  local reachable = peek._accept_after_command
+  peek:cancel()
+
+  assert(reachable == nil, "the command line's deferred accept must not be reachable from a public handle")
+end
+
+-- A confirmed command line tells listeners it ended only once the Ex command and
+-- the landing jump have run. A listener reacting to it therefore acts on the
+-- buffer the command left, and anything it opens cannot move the cursor the
+-- command's relative address counts from.
+
+-- Run `fn` with `lhs` mapped in Normal mode to `rhs`, and remove the mapping and
+-- the handle global the mapping stores even when `fn` fails. The global is
+-- cleared through `:lua` so this file itself never names `_G`, which selene
+-- rejects; the test body reads the handle back through `numb._state.active`.
+local function with_normal_mapping(lhs, rhs, fn)
+  vim.cmd(("nnoremap %s %s"):format(lhs, rhs))
+  local ok, err = pcall(fn)
+  pcall(vim.cmd, "nunmap " .. lhs)
+  pcall(vim.cmd, "lua _G.numb_test_p = nil")
+  if not ok then
+    error(err, 0)
+  end
+end
+
+-- Feed `keys` with remapping allowed, so a `<Plug>` mapping expands, and wait
+-- for Normal mode and for the deferred jump.
+local function feed_mapping(keys)
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "x", false)
+  wait_until_idle()
+  drain_scheduled()
+end
+
+local function buffer_has_line(bufnr, text)
+  return vim.tbl_contains(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), text)
+end
+
+function Tests.api_listener_reopening_a_peek_does_not_move_a_relative_command()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 5, 0 })
+  local bufnr = vim.api.nvim_get_current_buf()
+
+  local reopened
+  with_user_listener("NumbUnpeek", function(ev)
+    if reopened == nil and ev.data.accepted then
+      reopened = numb.peek(0, 30)
+    end
+  end, function()
+    run_cmd ":+2d\r"
+    drain_scheduled()
+  end)
+
+  assert(reopened ~= nil, "precondition: the accepted command line fired NumbUnpeek and the listener peeked")
+  local count = vim.api.nvim_buf_line_count(bufnr)
+  assert(count == 39, ("one line was deleted, the buffer has %d"):format(count))
+  assert(not buffer_has_line(bufnr, "line 07"), ":+2d from line 5 deletes line 7")
+  assert(buffer_has_line(bufnr, "line 32"), "line 32, 30 + 2, must survive: the peek must not move the address base")
+  assert(reopened:is_active(), "the listener's peek is still live after the drain")
+  -- The landing on line 7 ran before the listener peeked, so it cannot have
+  -- moved the cursor off the peek afterwards.
+  local line = cursor_of(reopened.winnr)
+  assert(line == 30, ("the listener's peek shows line 30 after the drain, the cursor is on %d"):format(line))
+
+  reopened:cancel()
+end
+
+function Tests.api_numb_unpeek_after_the_command_line_sees_the_command_result()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 5, 0 })
+  local bufnr = vim.api.nvim_get_current_buf()
+
+  local seen
+  with_user_listener("NumbUnpeek", function(ev)
+    if seen == nil and ev.data.accepted then
+      seen = {
+        line_count = vim.api.nvim_buf_line_count(bufnr),
+        cursor = vim.api.nvim_win_get_cursor(0)[1],
+      }
+    end
+  end, function()
+    run_cmd ":+2d\r"
+    drain_scheduled()
+  end)
+
+  assert(seen ~= nil, "precondition: the accepted command line fired NumbUnpeek")
+  assert(vim.api.nvim_buf_line_count(bufnr) == 39, "precondition: :+2d deleted one line")
+  assert(seen.line_count == 39, ("NumbUnpeek must fire after the command ran, it saw %d lines"):format(seen.line_count))
+  assert(seen.cursor == 7, ("NumbUnpeek must fire after the landing jump, the cursor was on %d"):format(seen.cursor))
+end
+
+function Tests.api_listener_reopening_a_peek_survives_a_shrinking_command()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local bufnr = vim.api.nvim_get_current_buf()
+
+  local reopened
+  vim.v.errmsg = ""
+  with_user_listener("NumbUnpeek", function(ev)
+    if reopened == nil and ev.data.accepted then
+      reopened = numb.peek(0, 40)
+    end
+  end, function()
+    run_cmd ":38,40d\r"
+    drain_scheduled()
+  end)
+
+  assert(reopened ~= nil, "precondition: the accepted command line fired NumbUnpeek and the listener peeked")
+  local count = vim.api.nvim_buf_line_count(bufnr)
+  assert(count == 37, ("precondition: :38,40d deleted three lines, the buffer has %d"):format(count))
+  assert(
+    not vim.v.errmsg:find("out of range", 1, true),
+    ("the deferred jump must not raise, v:errmsg is %q"):format(vim.v.errmsg)
+  )
+  assert(reopened:is_active(), "precondition: the listener's peek is live")
+  assert(numb._state.active == reopened, "precondition: the listener's peek is the one numb holds")
+  local line = cursor_of(reopened.winnr)
+  assert(
+    line >= 1 and line <= count,
+    ("the live peek's cursor must be in the buffer, got %d of %d"):format(line, count)
+  )
+  reopened:cancel()
+end
+
+function Tests.api_peek_accepted_before_the_deferred_jump_is_not_overridden()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+  with_normal_mapping(
+    "<Plug>(numb-test-acc)",
+    [[:30<CR><Cmd>lua _G.numb_test_p = require("numb").peek(0, 5); _G.numb_test_p:accept()<CR>]],
+    function()
+      record_peek_events(function(events)
+        feed_mapping "<Plug>(numb-test-acc)"
+        local accepted = vim.tbl_filter(function(event)
+          return event.data.line == 5 and event.data.accepted == true
+        end, events_named(events, "NumbUnpeek"))
+        assert(#accepted == 1, "precondition: the mapping opened the API peek on 5 and accepted it")
+        assert(numb._state.active == nil, "precondition: no peek is left live")
+        assert_cursor(5, "the accepted API peek is newer than the command line's jump and must win")
+      end)
+    end
+  )
+end
+
+function Tests.api_peek_opened_before_the_deferred_jump_orders_the_events()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+  with_normal_mapping(
+    "<Plug>(numb-test-open)",
+    [[:30<CR><Cmd>lua _G.numb_test_p = require("numb").peek(0, 5)<CR>]],
+    function()
+      record_peek_events(function(events)
+        feed_mapping "<Plug>(numb-test-open)"
+        local api_peek = numb._state.active
+        assert(
+          api_peek ~= nil and api_peek:is_active() and api_peek.line == 5,
+          "precondition: the mapping left the API peek on 5 live"
+        )
+
+        local cmdline_unpeek, api_open
+        local cmdline_unpeeks = 0
+        for index, event in ipairs(events) do
+          if event.name == "NumbUnpeek" and event.data.line == 30 then
+            cmdline_unpeeks = cmdline_unpeeks + 1
+            cmdline_unpeek = cmdline_unpeek or index
+            assert(event.data.accepted == true, "the command line peek was accepted")
+          elseif event.name == "NumbPeek" and event.data.line == 5 then
+            api_open = api_open or index
+          end
+        end
+        assert(api_open ~= nil, "precondition: the API peek fired NumbPeek")
+        assert(
+          cmdline_unpeeks == 1,
+          ("the command line peek ends exactly once, got %d NumbUnpeek"):format(cmdline_unpeeks)
+        )
+        assert(
+          cmdline_unpeek < api_open,
+          ("the old peek's NumbUnpeek (#%d) must come before the new NumbPeek (#%d)"):format(cmdline_unpeek, api_open)
+        )
+        assert_cursor(5, "the API peek stays on screen")
+
+        assert(api_peek:cancel() == true, "the API peek can be cancelled")
+        assert_cursor(30, "cancelling returns to where Vim's own :30 left the cursor")
+      end)
+    end
+  )
+end
+
+function Tests.api_listener_that_keeps_reopening_is_stopped()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  set_unpeeked_options()
+  local win = vim.api.nvim_get_current_win()
+
+  -- The cap only keeps a failing implementation from hanging the suite; the
+  -- assertion below is that the loop stops long before it.
+  local runs = 0
+  local ok, err
+  with_user_listener("NumbUnpeek", function()
+    runs = runs + 1
+    if runs < 1000 then
+      numb.peek(0, 7)
+    end
+  end, function()
+    numb.peek(0, 10)
+    ok, err = pcall(numb.peek, 0, 20)
+  end)
+
+  assert(ok == false, ("peek() must raise when a listener keeps reopening, ran the listener %d times"):format(runs))
+  assert(
+    tostring(err):find("keeps reopening", 1, true),
+    ("the error must say a listener keeps reopening, got %s"):format(tostring(err))
+  )
+  assert(runs < 50, ("the takeover loop must stop early, the listener ran %d times"):format(runs))
+  local saved = saved_windows(numb)
+  assert(#saved <= 1, ("at most one peek is left live, win_states holds %s"):format(vim.inspect(saved)))
+  assert(numb._state.active == nil, "the stopped loop leaves no live peek")
+  assert(
+    vim.tbl_isempty(numb._state.win_states),
+    ("the stopped loop leaves no saved state, win_states holds %s"):format(vim.inspect(saved))
+  )
+
+  if numb._state.active then
+    numb._state.active:cancel()
+  end
+  numb.disable()
+  numb.enable()
+  assert(#peeking_windows() == 0, ("no window keeps the flag, found %s"):format(vim.inspect(peeking_windows())))
+  assert(vim.tbl_isempty(numb._state.win_states), "no saved state is left behind")
+  assert_unpeeked_options(win, "the window after the loop was stopped")
+end
+
+-- The deferred jump carries line numbers in the buffer the command line was
+-- typed in. `:{N}b` switches the window to another buffer before it runs, and
+-- the number typed is then a buffer number that also reads as a line.
+function Tests.buffer_command_does_not_land_on_the_typed_number_in_the_new_buffer()
+  configure()
+  reset_buffer()
+  local buf_a = vim.api.nvim_get_current_buf()
+  vim.bo[buf_a].bufhidden = "hide"
+  -- Where `:{buf_a}b` would land if the jump ran in buf_a, clamped as numb does.
+  local wrong_line = math.min(buf_a, 40)
+  local origin = wrong_line == 20 and 21 or 20
+  vim.api.nvim_win_set_cursor(0, { origin, 0 })
+
+  reset_buffer()
+  local buf_b = vim.api.nvim_get_current_buf()
+  vim.bo[buf_b].bufhidden = "hide"
+  vim.api.nvim_win_set_cursor(0, { 30, 0 })
+  assert(buf_a ~= buf_b, "precondition: two buffers")
+  assert(wrong_line ~= origin, "precondition: landing on the typed number is distinguishable from the origin")
+
+  record_peek_events(function(events)
+    run_cmd((":%db\r"):format(buf_a))
+    drain_scheduled()
+    assert(#events_named(events, "NumbPeek") >= 1, ("precondition: :%db was peeked"):format(buf_a))
+  end)
+
+  assert(vim.api.nvim_get_current_buf() == buf_a, "precondition: the command switched the window to buf_a")
+  assert_cursor(origin, ("buf_a keeps its own cursor, not line %d from the typed number"):format(wrong_line))
+
+  pcall(vim.cmd, "bwipeout! " .. buf_b)
+end
+
+function Tests.api_peek_rejects_infinite_arguments()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  set_unpeeked_options()
+  local win = vim.api.nvim_get_current_win()
+  -- A valid call first, for the same reason as in api_peek_rejects_bad_arguments.
+  numb.peek(0, 10):cancel()
+  assert_cursor(1, "precondition: the valid peek was cancelled")
+
+  -- An infinity equals its own floor, so it passes the fraction check, and the
+  -- clamp then turns it into the first or last line instead of rejecting it.
+  local cases = {
+    { "an infinite line", { 0, math.huge } },
+    { "a negatively infinite line", { 0, -math.huge } },
+    { "an infinite range bound", { 0, 3, { range = { 1, math.huge } } } },
+  }
+  local problems = {}
+  for _, case in ipairs(cases) do
+    local label, args = case[1], case[2]
+    local ok, result = pcall(numb.peek, unpack(args, 1, 3))
+    if ok then
+      table.insert(problems, label .. " did not raise")
+    end
+    if not vim.tbl_isempty(numb._state.win_states) or numb.is_peeking() or vim.w[win].numb_peeking ~= nil then
+      table.insert(problems, label .. " left a peek behind")
+    end
+    -- Cleaned up so each case starts from the unpeeked window, whatever the last one did.
+    if ok and type(result) == "table" and result:is_active() then
+      result:cancel()
+    end
+    vim.api.nvim_win_set_cursor(win, { 1, 0 })
+  end
+  assert(#problems == 0, table.concat(problems, "; "))
+  assert_unpeeked_options(win, "after every rejected call")
+end
+
+-- The line numbers in the current window's jumplist, oldest first.
+local function jumplist_lines()
+  local lines = {}
+  for _, entry in ipairs(vim.fn.getjumplist()[1]) do
+    table.insert(lines, entry.lnum)
+  end
+  return lines
+end
+
+local function index_of(list, value)
+  for index, item in ipairs(list) do
+    if item == value then
+      return index
+    end
+  end
+  return nil
+end
+
+-- Two command lines confirmed back to back from one mapping: the second opens its
+-- peek before the first one's scheduled landing has run. That landing is older
+-- than the new peek, and nothing re-entered a restore, so it still runs first,
+-- exactly as it did before the API existed.
+local TWO_JUMPS = "<Plug>(numb-test-two)"
+
+function Tests.api_back_to_back_command_lines_keep_both_jumplist_entries()
+  configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  vim.cmd "clearjumps"
+
+  with_normal_mapping(TWO_JUMPS, ":10<CR>:20<CR>", function()
+    feed_mapping(TWO_JUMPS)
+  end)
+
+  assert_cursor(20, "precondition: the mapping ran both command lines")
+  -- Vim's own `:N` pushes nothing, so both entries come from numb's landings.
+  local jumps = jumplist_lines()
+  local from_origin, from_first = index_of(jumps, 1), index_of(jumps, 10)
+  assert(from_origin ~= nil, ("the first landing records line 1, the jumplist is %s"):format(vim.inspect(jumps)))
+  assert(from_first ~= nil, ("the second landing records line 10, the jumplist is %s"):format(vim.inspect(jumps)))
+  assert(from_origin < from_first, ("line 1 is recorded before line 10, the jumplist is %s"):format(vim.inspect(jumps)))
+
+  feedkeys "<C-o>"
+  assert_cursor(10, "<C-o> from line 20 goes back to line 10")
+  feedkeys "<C-o>"
+  assert_cursor(1, "a second <C-o> goes back to line 1")
+end
+
+function Tests.api_back_to_back_command_lines_each_end_once_in_order()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+  with_normal_mapping(TWO_JUMPS, ":10<CR>:20<CR>", function()
+    record_peek_events(function(events)
+      feed_mapping(TWO_JUMPS)
+      assert(numb._state.active == nil, "precondition: no peek is left live")
+
+      local unpeeks = events_named(events, "NumbUnpeek")
+      assert(
+        #unpeeks == 2,
+        ("each command line peek ends exactly once, got %d NumbUnpeek: %s"):format(#unpeeks, vim.inspect(unpeeks))
+      )
+      assert(unpeeks[1].data.line == 10 and unpeeks[1].data.accepted == true, "the first to end is :10, accepted")
+      assert(unpeeks[2].data.line == 20 and unpeeks[2].data.accepted == true, "the second to end is :20, accepted")
+
+      -- The second command line starts peeking at its first digit, line 2.
+      local first_unpeek, second_open
+      for index, event in ipairs(events) do
+        if event.name == "NumbUnpeek" and event.data.line == 10 then
+          first_unpeek = first_unpeek or index
+        elseif event.name == "NumbPeek" and (event.data.line == 2 or event.data.line == 20) then
+          second_open = second_open or index
+        end
+      end
+      assert(second_open ~= nil, "precondition: the second command line peeked")
+      assert(
+        first_unpeek < second_open,
+        ("the first peek's NumbUnpeek (#%d) comes before the second's NumbPeek (#%d)"):format(first_unpeek, second_open)
+      )
+    end)
+  end)
+end
+
+-- Run `fn` with a `User NumbUnpeek` listener that disables the plugin the first
+-- time it runs. Returns whether the listener ran.
+local function with_disabling_listener(fn)
+  local numb = require "numb"
+  local ran = false
+  with_user_listener("NumbUnpeek", function()
+    if not ran then
+      ran = true
+      numb.disable()
+    end
+  end, fn)
+  return ran
+end
+
+-- What is left peeking anywhere, read before any cleanup so a failure reports
+-- the state the code under test left.
+local function leftover_peek(numb)
+  return {
+    enabled = numb.is_enabled(),
+    active = numb._state.active,
+    flagged = peeking_windows(),
+    saved = saved_windows(numb),
+  }
+end
+
+local function assert_nothing_left_peeking(leftover, win, label)
+  assert(not leftover.enabled, ("%s: the listener disabled the plugin"):format(label))
+  assert(leftover.active == nil, ("%s: no peek is live"):format(label))
+  assert(
+    #leftover.flagged == 0,
+    ("%s: no window keeps the flag, found %s"):format(label, vim.inspect(leftover.flagged))
+  )
+  assert(#leftover.saved == 0, ("%s: no saved state is left, found %s"):format(label, vim.inspect(leftover.saved)))
+  assert_unpeeked_options(win, label)
+end
+
+function Tests.api_listener_disabling_during_an_api_takeover_leaves_nothing_peeking()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  set_unpeeked_options()
+  local win = vim.api.nvim_get_current_win()
+
+  local first = numb.peek(0, 10)
+  assert(first:is_active(), "precondition: the first peek is live")
+  local second, second_active, leftover
+  local ran = with_disabling_listener(function()
+    second = numb.peek(0, 20)
+    second_active = second:is_active()
+    leftover = leftover_peek(numb)
+  end)
+
+  if second_active then
+    second:cancel()
+  end
+  numb.disable()
+  numb.enable()
+
+  assert(ran, "precondition: the takeover fired NumbUnpeek and the listener disabled the plugin")
+  assert(not second_active, "a peek opened while the plugin was being disabled is inactive")
+  assert_nothing_left_peeking(leftover, win, "after the takeover")
+  assert_cursor(1, "the window is back on its origin")
+end
+
+function Tests.api_listener_disabling_during_a_command_line_takeover_leaves_nothing_peeking()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  set_unpeeked_options()
+  local win = vim.api.nvim_get_current_win()
+
+  local api_peek = numb.peek(0, 10)
+  assert(api_peek:is_active(), "precondition: the API peek is live")
+  local leftover
+  local ran = with_disabling_listener(function()
+    run_cmd ":20\r"
+    drain_scheduled()
+    leftover = leftover_peek(numb)
+  end)
+
+  numb.disable()
+  numb.enable()
+
+  assert(ran, "precondition: the command line took over and the listener disabled the plugin")
+  assert(not api_peek:is_active(), "the API peek was ended by the takeover")
+  assert_nothing_left_peeking(leftover, win, "after the command line")
+end
+
+-- The scenario runs in a child Neovim because the suite cannot see it at all:
+-- it is launched from a `+lua` command, which runs before startup finishes, and
+-- Vim fires no OptionSet until it has.
+local OPTIONSET_DURING_CANCEL = [[
+vim.opt.runtimepath:append(vim.fn.getcwd())
+local numb = require "numb"
+numb.setup { centered_peeking = false }
+local lines = {}
+for i = 1, 40 do
+  lines[i] = ("line %02d"):format(i)
+end
+vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.wo.number = false
+vim.wo.cursorline = false
+vim.wo.relativenumber = true
+vim.wo.foldenable = true
+local win = vim.api.nvim_get_current_win()
+
+local first = numb.peek(0, 10)
+local report = { first_active = first:is_active() }
+-- Installed after the peek, whose own options fire OptionSet too, and gated on
+-- the cancel so only the restore can trigger it.
+local cancelling = false
+local nested
+vim.api.nvim_create_autocmd("OptionSet", {
+  pattern = "number",
+  callback = function()
+    if cancelling and nested == nil then
+      nested = numb.peek(0, 30)
+      report.nested_active = nested:is_active()
+    end
+  end,
+})
+cancelling = true
+local ok, err = pcall(first.cancel, first)
+cancelling = false
+
+report.cancel_ok = ok
+report.cancel_error = not ok and tostring(err) or nil
+report.fired = nested ~= nil
+report.still_active = nested ~= nil and nested:is_active()
+report.live = numb._state.active ~= nil
+report.flagged = vim.w[win].numb_peeking ~= nil
+report.saved = vim.tbl_count(numb._state.win_states)
+report.options = {
+  number = vim.wo[win].number,
+  cursorline = vim.wo[win].cursorline,
+  relativenumber = vim.wo[win].relativenumber,
+  foldenable = vim.wo[win].foldenable,
+}
+report.cursor = vim.api.nvim_win_get_cursor(win)[1]
+io.stdout:write(vim.json.encode(report))
+]]
+
+function Tests.api_peek_opened_while_a_cancel_restores_options_is_inactive()
+  local script = vim.fn.tempname()
+  vim.fn.writefile(vim.split(OPTIONSET_DURING_CANCEL, "\n"), script)
+  local output = vim.fn.system { vim.v.progpath, "--headless", "--clean", "-l", script }
+  local failed = vim.v.shell_error ~= 0
+  vim.fn.delete(script)
+  assert(not failed, ("the child Neovim failed: %s"):format(output))
+  local decoded, report = pcall(vim.json.decode, output)
+  assert(decoded and type(report) == "table", ("the child reported no result: %s"):format(output))
+
+  assert(report.first_active, "precondition: the first peek is live")
+  assert(report.cancel_ok, ("cancel() must not raise: %s"):format(tostring(report.cancel_error)))
+  assert(report.fired, "precondition: restoring 'number' fired OptionSet and the autocommand called peek()")
+  assert(not report.nested_active, "a peek opened while another is being restored gets an inactive handle")
+  assert(not report.still_active, "the nested handle is still inactive once cancel() returns")
+  assert(not report.live, "no peek is live after cancel()")
+  assert(not report.flagged, "the window does not keep the peeking flag")
+  assert(report.saved == 0, ("no saved state is left, win_states holds %d"):format(report.saved))
+  local expected = { number = false, cursorline = false, relativenumber = true, foldenable = true }
+  assert(
+    vim.deep_equal(report.options, expected),
+    ("the window's options are restored, got %s"):format(vim.inspect(report.options))
+  )
+  assert(report.cursor == 1, ("the window is back on its origin, the cursor is on %d"):format(report.cursor))
+end
+
+-- Runs a child scenario like the one above and returns the table it reported.
+local function run_optionset_child(source)
+  local script = vim.fn.tempname()
+  vim.fn.writefile(vim.split(source, "\n"), script)
+  local output = vim.fn.system { vim.v.progpath, "--headless", "--clean", "-l", script }
+  local failed = vim.v.shell_error ~= 0
+  vim.fn.delete(script)
+  assert(not failed, ("the child Neovim failed: %s"):format(output))
+  local decoded, report = pcall(vim.json.decode, output)
+  assert(decoded and type(report) == "table", ("the child reported no result: %s"):format(output))
+  return report
+end
+
+-- What both children below report once the call under test has returned.
+local OPTIONSET_DISABLE_REPORT = [[
+report.call_ok = ok
+report.call_error = not ok and tostring(err) or nil
+report.enabled = numb.is_enabled()
+report.still_active = handle ~= nil and handle:is_active()
+report.live = numb._state.active ~= nil
+report.flagged = vim.w[win].numb_peeking ~= nil
+report.peeking = numb.is_peeking(win)
+report.saved = vim.tbl_count(numb._state.win_states)
+report.options = {
+  number = vim.wo[win].number,
+  cursorline = vim.wo[win].cursorline,
+  relativenumber = vim.wo[win].relativenumber,
+  foldenable = vim.wo[win].foldenable,
+}
+report.cursor = vim.api.nvim_win_get_cursor(win)[1]
+report.events = events
+io.stdout:write(vim.json.encode(report))
+]]
+
+-- Shared by both children: a buffer, pre-peek options that every peek option
+-- differs from, an event log, and an OptionSet listener that disables the
+-- plugin once, only while `armed` is set.
+local OPTIONSET_DISABLE_SETUP = [[
+vim.opt.runtimepath:append(vim.fn.getcwd())
+local numb = require "numb"
+numb.setup { centered_peeking = false }
+local lines = {}
+for i = 1, 40 do
+  lines[i] = ("line %02d"):format(i)
+end
+vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.wo.number = false
+vim.wo.cursorline = false
+vim.wo.relativenumber = true
+vim.wo.foldenable = true
+local win = vim.api.nvim_get_current_win()
+local report = {}
+local events = {}
+local recording = false
+vim.api.nvim_create_autocmd("User", {
+  pattern = { "NumbPeek", "NumbUnpeek" },
+  callback = function(event)
+    if recording then
+      table.insert(events, event.match)
+    end
+  end,
+})
+local armed = false
+vim.api.nvim_create_autocmd("OptionSet", {
+  callback = function()
+    if armed and not report.fired then
+      report.fired = true
+      numb.disable()
+      report.disabled_in_listener = not numb.is_enabled()
+    end
+  end,
+})
+]]
+
+-- Case A: the listener disables the plugin while peek() is still setting the
+-- peek options, so the peek never becomes live.
+local OPTIONSET_DISABLE_DURING_OPEN = OPTIONSET_DISABLE_SETUP
+  .. [[
+recording = true
+armed = true
+local ok, handle = pcall(numb.peek, 0, 30)
+local err = not ok and handle or nil
+handle = ok and handle or nil
+armed = false
+recording = false
+]]
+  .. OPTIONSET_DISABLE_REPORT
+
+-- Case B: the peek is live, and the listener disables the plugin while
+-- update() is moving it.
+local OPTIONSET_DISABLE_DURING_UPDATE = OPTIONSET_DISABLE_SETUP
+  .. [[
+local handle = numb.peek(0, 10)
+report.first_active = handle:is_active()
+recording = true
+armed = true
+local ok, moved = pcall(handle.update, handle, 30)
+local err = not ok and moved or nil
+if ok then
+  report.moved = moved
+end
+armed = false
+recording = false
+]]
+  .. OPTIONSET_DISABLE_REPORT
+
+local function assert_disabled_and_restored(report)
+  assert(report.fired, "precondition: a peek option fired OptionSet while the listener was armed")
+  assert(report.disabled_in_listener, "precondition: the listener's disable() turned the plugin off")
+  assert(report.call_ok, ("the call must not raise: %s"):format(tostring(report.call_error)))
+  assert(report.enabled == false, "the plugin stays disabled after the call returns")
+  assert(not report.still_active, "the handle is inactive once the call returns")
+  assert(not report.live, "no peek is live after the call")
+  assert(not report.flagged, "the window does not keep the peeking flag")
+  assert(not report.peeking, "is_peeking() reports the window as not peeking")
+  assert(report.saved == 0, ("no saved state is left, win_states holds %d"):format(report.saved))
+  local expected = { number = false, cursorline = false, relativenumber = true, foldenable = true }
+  assert(
+    vim.deep_equal(report.options, expected),
+    ("the window's options are restored, got %s"):format(vim.inspect(report.options))
+  )
+  assert(report.cursor == 1, ("the window is back on its origin, the cursor is on %d"):format(report.cursor))
+end
+
+-- The peek being opened never became live, so listeners must hear nothing
+-- about it: no NumbPeek, and so no NumbUnpeek to match one. This is stricter
+-- than a matched NumbPeek/NumbUnpeek pair on purpose.
+function Tests.api_peek_opened_while_an_optionset_listener_disables_is_inactive()
+  local report = run_optionset_child(OPTIONSET_DISABLE_DURING_OPEN)
+
+  assert_disabled_and_restored(report)
+  assert(
+    vim.deep_equal(report.events, {}),
+    ("a peek that never became live fires no event, got %s"):format(vim.inspect(report.events))
+  )
+end
+
+function Tests.api_update_while_an_optionset_listener_disables_ends_the_peek()
+  local report = run_optionset_child(OPTIONSET_DISABLE_DURING_UPDATE)
+
+  assert(report.first_active, "precondition: the peek is live before update()")
+  assert(
+    report.moved == false,
+    ("update() on a peek ended mid-move returns false, got %s"):format(tostring(report.moved))
+  )
+  assert_disabled_and_restored(report)
+  assert(
+    vim.deep_equal(report.events, { "NumbUnpeek" }),
+    ("the peek ends with one NumbUnpeek and no NumbPeek follows it, got %s"):format(vim.inspect(report.events))
+  )
+end
+
+-- The user confirmed the command line before disabling, so the jump they asked
+-- for still lands, and listeners still hear the peek end.
+function Tests.confirmed_landing_still_runs_after_disable()
+  local numb = configure()
+  reset_buffer()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  vim.cmd "clearjumps"
+
+  record_peek_events(function(events)
+    run_cmd ":40\r"
+    assert(#events_named(events, "NumbPeek") >= 1, "precondition: :40 was peeked")
+    assert(#events_named(events, "NumbUnpeek") == 0, "precondition: the landing has not run yet when disabling")
+    numb.disable()
+    drain_scheduled()
+
+    local unpeeks = events_named(events, "NumbUnpeek")
+    assert(#unpeeks == 1, ("the confirmed peek ends exactly once, got %d NumbUnpeek"):format(#unpeeks))
+    assert(unpeeks[1].data.accepted == true, "it reports accepted == true")
+  end)
+
+  numb.enable()
+  assert_cursor(40, "the confirmed jump lands")
+  local jumps = jumplist_lines()
+  assert(index_of(jumps, 1) ~= nil, ("the landing records line 1, the jumplist is %s"):format(vim.inspect(jumps)))
 end
 
 -------------------------------------------------------------------------------
