@@ -228,6 +228,11 @@ local SETUP = [==[
   vim.cmd [[nnoremap <silent> X :<C-U>let g:count_seen = v:count1<CR>]]
   vim.cmd [[nnoremap <silent> J :30<CR>]]
   vim.cmd [[nnoremap K :40]]
+  -- Another plugin driving a `numb.peek()` handle from command line mode, the
+  -- way a picker previewing its selection does.
+  vim.cmd [[cnoremap <F2> <Cmd>lua _G.numb_test_peek = require("numb").peek(0, 60)<CR>]]
+  vim.cmd [[cnoremap <F3> <Cmd>lua _G.numb_test_peek:update(80)<CR>]]
+  vim.cmd [[cnoremap <F4> <Cmd>lua _G.numb_test_peek:cancel()<CR>]]
 ]==]
 
 local failures = {}
@@ -373,6 +378,24 @@ local scenarios = {
       local frames = child.type(":40", 300)
       local last = frames[#frames]
       every_frame(":40 without SafeState still previews line 40", { last }, shows "40 text line 040")
+    end,
+  },
+  {
+    name = "handle methods drawn from command line mode",
+    run = function(child)
+      child.type ":"
+      -- The command line itself addresses nothing, so whatever is drawn comes
+      -- from the handle alone.
+      every_frame("peek() from command line mode previews line 60", child.type "<F2>", shows "60 text line 060")
+      every_frame("update() from command line mode previews line 80", child.type "<F3>", shows "80 text line 080")
+      local frames = child.type "<F4>"
+      no_frame("cancel() from command line mode never shows line 80 again", frames, shows "80 text line 080")
+      -- Only the last frame: the step has to end on the view from before the
+      -- peek, drawn, and an empty step would leave line 80 on screen.
+      every_frame("cancel() from command line mode brings the original view back", { frames[#frames] }, function(frame)
+        return frame.lines[1] == "text line 001" and lacks_number_column(frame)
+      end)
+      child.type "<Esc>"
     end,
   },
 }

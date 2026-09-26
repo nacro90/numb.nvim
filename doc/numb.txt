@@ -283,8 +283,15 @@ numb.enable({opts})
                                                               *numb.disable()*
 numb.disable()
                 Remove the autocommands and drop all saved state. Any window
-                that is peeking right now is restored first. Peeking stays off
-                until |numb.enable()| or |numb.setup()| is called again.
+                that is peeking right now is restored first, including one
+                opened through |numb.peek()|, whose handle becomes inactive
+                and whose `User NumbUnpeek` fires. Peeking stays off until
+                |numb.enable()| or |numb.setup()| is called again.
+
+                A command line you already confirmed is the exception: its
+                jump is made after the Ex command runs, and that still
+                happens, with its `User NumbUnpeek`, when this is called in
+                between, because the jump was asked for while peeking was on.
 
                 Note that the |:Numb| command remains defined, so peeking can
                 always be turned back on with `:Numb enable`.
@@ -325,6 +332,211 @@ numb.is_peeking({winnr})
                 Return: ~
                     (`boolean`) `true` while that window is peeking.
 
+                                                                 *numb.peek()*
+numb.peek({winnr}, {line}, {opts})
+                Preview {line} in a window without moving there, exactly as
+                the command line does, and return a handle that moves,
+                accepts or cancels that preview. Meant for other plugins: a
+                picker previewing its selection, or an LSP symbol list.
+
+                The preview looks the same as one from the command line:
+                |numb-show_numbers|, |numb-show_cursorline|,
+                |numb-hide_relativenumbers| and |numb-centered_peeking| apply.
+                |numb-disable_for_buftype| and |numb-disable_for_filetype| do
+                not. They decide when the command line peeks on its own,
+                while a caller here asked explicitly. Likewise
+                |numb-range_peek| only gates the command line: an explicit
+                {opts.range} is always highlighted.
+
+                Only one peek is live at a time. Calling |numb.peek()| again
+                ends the previous peek, and so does a command line once it
+                addresses a line: typing `:12` takes the preview over, while
+                `:w` or `:let` leaves it up. The handle that was superseded
+                becomes inactive, see |NumbPeek:is_active()|.
+
+                Ending the previous peek fires `User NumbUnpeek`, and a
+                listener may open another peek from there, which is ended
+                in turn. A listener that reopens every time is stopped after
+                a few rounds: the peek it opened last is ended, and this
+                call raises "a NumbUnpeek listener keeps reopening a peek",
+                leaving no peek live.
+
+                While peeking is disabled (|numb.disable()|, `:Numb disable`)
+                nothing is previewed and the handle is inactive from the
+                start, so a caller needs no check of its own. The same holds
+                when a listener disables peeking while this call ends the
+                previous peek, and for a call made while a peek is being
+                shown, moved or put back, such as from an |OptionSet|
+                autocommand that restoring a window option fires. Putting
+                back includes landing on the target of an accepted peek, so
+                a |WinEnter| autocommand the landing fires gets an inactive
+                handle too.
+
+                Parameters: ~
+                  • {winnr} (`integer`) Window handle. `0` means the current
+                    window. The window does not have to be the current one.
+                  • {line} (`integer`) Line to preview, clamped to the first
+                    or the last line of the buffer.
+                  • {opts} (`table?`) Optional fields:
+                    • {range} (`integer[]?`) A `{ first, last }` pair of line
+                      numbers to highlight with |NumbRange| as well. Both
+                      ends are clamped, and reversed bounds are accepted.
+
+                Return: ~
+                    (`NumbPeek`) The handle, with the methods below.
+
+                Raises an error, through |error()|, when an argument has the
+                wrong type, {winnr}, {line} or an end of {opts.range} is not
+                an integer (`10.5`, NaN and `math.huge` are rejected), or
+                {winnr} is not a valid window. These are programming
+                mistakes, so they are not reported quietly, and nothing is
+                peeked.
+
+                Public since 1.3.0. The function, the handle methods and
+                |NumbPeek-events| follow Semantic Versioning: a breaking
+                change to any of them needs a new major version.
+
+                                                           *NumbPeek:update()*
+NumbPeek:update({line}, {opts})
+                Move the preview to another line, in the same window. The
+                window is restored first and peeked again, so what the
+                final restore puts back is always the state from before the
+                first peek. {opts.range} replaces the highlighted range, and
+                leaving it out clears the range. Fires `User NumbPeek`.
+
+                Parameters: ~
+                  • {line} (`integer`) Line to preview, clamped as in
+                    |numb.peek()|.
+                  • {opts} (`table?`) As in |numb.peek()|.
+
+                Return: ~
+                    (`boolean`) `true` when the preview moved, `false` when
+                    the handle is inactive, in which case nothing happens.
+                    Bad arguments raise an error either way, before anything
+                    changes, so the previous preview stays up.
+
+                                                           *NumbPeek:accept()*
+NumbPeek:accept()
+                End the peek and stay on the previewed line. The jump
+                happens immediately and is recorded in the jumplist, so
+                |CTRL-O| returns to where the cursor was before the peek. The
+                window options are restored, any fold around the line is
+                opened, and the line is centered when
+                |numb-centered_peeking| is on. Focus stays where it was:
+                accepting a peek in another window does not switch to it.
+                Fires `User NumbUnpeek` with `accepted = true`.
+
+                Return: ~
+                    (`boolean`) `true` when the peek was accepted, `false`
+                    when the handle is inactive, in which case nothing
+                    happens.
+
+                                                           *NumbPeek:cancel()*
+NumbPeek:cancel()
+                End the peek and put the window back as it was: the cursor,
+                the window options and the scroll position. Fires
+                `User NumbUnpeek` with `accepted = false`.
+
+                If the window was switched to another buffer during the
+                peek, both this and |NumbPeek:accept()| only restore the
+                window options: the saved positions belong to the old
+                buffer, so the cursor stays where the switch put it.
+
+                Return: ~
+                    (`boolean`) `true` when the peek was cancelled, `false`
+                    when the handle is inactive, in which case nothing
+                    happens.
+
+                                                        *NumbPeek:is_active()*
+NumbPeek:is_active()
+                Whether this handle is the live peek. A handle becomes
+                inactive once it is accepted or cancelled, once another peek
+                takes over, once |numb.disable()| is called, or once its
+                window is closed. It never becomes active again: call
+                |numb.peek()| for a new handle.
+
+                Return: ~
+                    (`boolean`) `true` while the handle is live.
+
+                                                             *NumbPeek-events*
+Every peek fires two |User| autocommands, whether it was opened through
+|numb.peek()| or by typing on the command line. The details are in the
+event's `data` field (see |nvim_create_autocmd()|).
+
+  `User NumbPeek`    When a peek opens and on every update, after the
+                     window shows the new line. Typing `:120` fires it once
+                     per keystroke while the command line addresses a line.
+  `User NumbUnpeek`  Once per peek, when it ends: accepted, cancelled,
+                     taken over by another peek, ended by |numb.disable()|,
+                     or its window closed. A takeover fires `NumbUnpeek` for
+                     the old peek before `NumbPeek` for the new one. It
+                     never fires twice for a peek, and fires exactly once
+                     unless putting the window back or landing raises an
+                     error. numb raises none there itself; one can only come
+                     from an autocommand of yours that the restore or the
+                     landing triggers, such as |WinEnter|, or through the
+                     |:normal| the landing runs. That error propagates, and
+                     the peek it hit fires no `NumbUnpeek`.
+
+                     When the command line confirms a peek, the window is
+                     put back at once, so the Ex command runs from where the
+                     peek started, and `NumbUnpeek` fires only after the
+                     command has run and the cursor has landed. A listener
+                     therefore sees the buffer as the command left it, and a
+                     peek it opens cannot change what the command acted on.
+                     A peek opened in that window before then, such as by
+                     the next command line of a mapping, makes the landing
+                     and fires `NumbUnpeek` first, then shows itself. By
+                     then the command has run, so each of two command lines
+                     confirmed back to back keeps its jumplist entry, and
+                     the new peek starts from where the first one landed.
+
+`data` fields: ~
+  • {win} (`integer`) Window handle of the peeked window: the one whose
+    buffer is previewed and where accepting lands. |numb.is_peeking()| and
+    |w:numb_peeking| describe the same window.
+  • {line} (`integer`) The previewed line, after clamping.
+  • {range} (`integer[]?`) The highlighted range as `{ low, high }`, or `nil`
+    when there is none.
+  • {accepted} (`boolean`) `NumbUnpeek` only: `true` when the peek ended
+    through |NumbPeek:accept()| or a confirmed command line, `false` for
+    every other way it can end. It stays `true` when the window had been
+    switched to another buffer and so did not move.
+
+Reacting to a confirmed jump: >lua
+    vim.api.nvim_create_autocmd('User', {
+      pattern = 'NumbUnpeek',
+      callback = function(args)
+        if args.data.accepted then
+          print(('landed on line %d'):format(args.data.line))
+        end
+      end,
+    })
+<
+                                                             *numb-api-picker*
+A picker previewing its selection: peek when the selection first lands on a
+line, move the same handle as it changes, accept on confirm, cancel on close.
+Since |NumbPeek:update()| returns `false` for a handle that has gone
+inactive, the picker opens a new peek whenever that happens: >lua
+    local numb = require('numb')
+    local preview
+
+    local function on_selection_changed(win, line)
+      if not (preview and preview:update(line)) then
+        preview = numb.peek(win, line)
+      end
+    end
+
+    local function on_confirm()
+      if preview then preview:accept() end
+      preview = nil
+    end
+
+    local function on_close()
+      if preview then preview:cancel() end
+      preview = nil
+    end
+<
 ==============================================================================
 8. Statusline integration                                    *numb-statusline*
 

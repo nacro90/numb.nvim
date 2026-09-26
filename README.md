@@ -221,6 +221,50 @@ require('lualine').setup {
 
 `require('numb').is_peeking()` answers the same question from Lua.
 
+### Lua API
+
+Other plugins can use the same preview.
+`require('numb').peek(winnr, line, opts?)` previews a line in any window, `0`
+being the current one, and returns a handle with `update(line, opts?)`,
+`accept()`, `cancel()` and `is_active()`. Pass
+`opts.range = { first, last }` to highlight a range as well. `accept()` jumps
+right away and pushes the jumplist entry, so `<C-o>` returns; `cancel()` puts
+the window back as it was. A picker previewing its selection looks like this:
+
+```lua
+local numb = require('numb')
+local preview
+
+local function on_selection_changed(win, line)
+  -- update() returns false once the handle is inactive, so open a new peek
+  if not (preview and preview:update(line)) then
+    preview = numb.peek(win, line)
+  end
+end
+
+local function on_confirm()
+  if preview then preview:accept() end
+  preview = nil
+end
+
+local function on_close()
+  if preview then preview:cancel() end
+  preview = nil
+end
+```
+
+Only one peek is live at a time: a new `peek()`, or a command line that
+addresses a line, takes over, and the old handle stops doing anything. While
+the plugin is disabled `peek()` returns a handle that is inactive from the
+start. Every peek, the command line's included, fires `User NumbPeek` when it
+opens or moves and `User NumbUnpeek` once when it ends, never twice, with the
+window, the line and the range in the event data. `NumbUnpeek` is skipped only
+if putting the window back or landing raises an error, which can come from an
+autocommand of yours such as `WinEnter` or from the `:normal` the landing runs.
+
+The API is public from 1.3.0, and a breaking change to it needs a major
+version. See `:h numb.peek()` and `:h NumbPeek-events` for the full contract.
+
 ## Troubleshooting
 
 Run `:checkhealth numb`. It reports the Neovim version, where numb.nvim was
