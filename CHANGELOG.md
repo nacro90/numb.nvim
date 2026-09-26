@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Public peek API for other plugins. `require('numb').peek(winnr, line, opts?)`
+  previews a line in any window, exactly as the command line does, and returns
+  a handle with `update()`, `accept()`, `cancel()` and `is_active()`, so a
+  picker or a symbol list can preview its selection and jump only on confirm.
+  `accept()` jumps immediately and pushes the jumplist entry, so `<C-o>`
+  returns; `opts.range` highlights a range with `NumbRange`. The display
+  options apply as usual, while `disable_for_buftype` and
+  `disable_for_filetype` do not, since the caller asked explicitly. One peek is
+  live at a time: a new one, or a command line that addresses a line, takes
+  over and the old handle goes inactive, and so does `disable()`. Bad
+  arguments, a non-integer or infinite line or window included, raise an
+  error, as does a `NumbUnpeek` listener that keeps reopening a peek. Public
+  from this release on, so a breaking change needs a major version; see
+  `:h numb.peek()`.
+- `User NumbPeek` and `User NumbUnpeek` autocommands. `NumbPeek` fires when a
+  peek opens and on every update, `NumbUnpeek` once when it ends, whether
+  accepted, cancelled, taken over, disabled or closed with its window.
+  The event data carries `win`, `line` and `range`, plus `accepted` on
+  `NumbUnpeek`. Command line peeks fire them too, so a statusline or another
+  plugin can follow any preview without polling. For a confirmed command line
+  `NumbUnpeek` fires once the command has run and the cursor has landed.
+
+### Fixed
+- A confirmed command that switches the window to another buffer, such as
+  `:2b`, no longer moves the cursor to that line of the new buffer afterwards.
+
 ## [1.2.1] - 2026-09-24
 
 ### Changed
