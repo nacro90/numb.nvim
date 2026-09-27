@@ -2805,6 +2805,55 @@ function Tests.api_update_while_an_optionset_listener_disables_ends_the_peek()
   )
 end
 
+-- Case B again, but the listener waits for the show half of the move: the
+-- restore half puts 'number' back to off, so the first OptionSet that leaves it
+-- on comes from peeking the new target. The reset then drops the saved state
+-- the show had just recorded, and only the write-back at the end of the peek
+-- lets update() put the window back.
+local OPTIONSET_DISABLE_DURING_UPDATE_SHOW = OPTIONSET_DISABLE_SETUP
+  .. [[
+local armed_on_show = false
+vim.api.nvim_create_autocmd("OptionSet", {
+  pattern = "number",
+  callback = function()
+    if armed_on_show and not report.fired and vim.wo[win].number then
+      report.fired = true
+      report.fired_on_show = vim.w[win].numb_peeking == nil
+      numb.disable()
+      report.disabled_in_listener = not numb.is_enabled()
+    end
+  end,
+})
+local handle = numb.peek(0, 10)
+report.first_active = handle:is_active()
+recording = true
+armed_on_show = true
+local ok, moved = pcall(handle.update, handle, 30)
+local err = not ok and moved or nil
+if ok then
+  report.moved = moved
+end
+armed_on_show = false
+recording = false
+]]
+  .. OPTIONSET_DISABLE_REPORT
+
+function Tests.api_update_while_an_optionset_listener_disables_on_the_show_half_ends_the_peek()
+  local report = run_optionset_child(OPTIONSET_DISABLE_DURING_UPDATE_SHOW)
+
+  assert(report.first_active, "precondition: the peek is live before update()")
+  assert(report.fired_on_show, "precondition: the listener fired after the restore half had cleared the flag")
+  assert(
+    report.moved == false,
+    ("update() on a peek ended mid-move returns false, got %s"):format(tostring(report.moved))
+  )
+  assert_disabled_and_restored(report)
+  assert(
+    vim.deep_equal(report.events, { "NumbUnpeek" }),
+    ("the peek ends with one NumbUnpeek and no NumbPeek follows it, got %s"):format(vim.inspect(report.events))
+  )
+end
+
 -- The user confirmed the command line before disabling, so the jump they asked
 -- for still lands, and listeners still hear the peek end.
 function Tests.confirmed_landing_still_runs_after_disable()
@@ -2832,6 +2881,2474 @@ function Tests.confirmed_landing_still_runs_after_disable()
 end
 
 -------------------------------------------------------------------------------
+-- FLOAT PEEK TESTS
+-------------------------------------------------------------------------------
+
+-- With `peek_style = "float"`, or `opts.style = "float"` on `numb.peek()`, the
+-- target is shown in a float anchored to the target window, and the target
+-- window itself is never touched. "The target window did not change" also holds
+-- when nothing was peeked at all, so every test first proves the float opened
+-- and shows the target before asserting anything about the window behind it.
+
+-- Every float window, whoever opened it.
+local function float_windows()
+  local floats = {}
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_config(win).relative ~= "" then
+      table.insert(floats, win)
+    end
+  end
+  return floats
+end
+
+-- The one float that is open. Raises unless there is exactly one, so no test can
+-- go on to assert things about a float that is not there.
+local function the_float(label)
+  local floats = float_windows()
+  assert(#floats == 1, ("%s: expected exactly one float, found %d"):format(label, #floats))
+  return floats[1]
+end
+
+local function assert_no_float(label)
+  local floats = float_windows()
+  assert(#floats == 0, ("%s: expected no float, found %d"):format(label, #floats))
+end
+
+-- Close any float a failed assertion left open, so it cannot leak into a later
+-- test. Passing tests close their own float and assert that they did.
+local function close_floats()
+  for _, win in ipairs(float_windows()) do
+    pcall(vim.api.nvim_win_close, win, true)
+  end
+end
+
+-- Run `fn` with the global value of option `name` set to `value`, and put the
+-- old value back even when `fn` fails.
+local function with_global_option(name, value, fn)
+  local saved = vim.go[name]
+  vim.go[name] = value
+  local ok, err = pcall(fn)
+  close_floats()
+  vim.go[name] = saved
+  if not ok then
+    error(err, 0)
+  end
+end
+
+-- 'winborder' exists from Neovim 0.11 on. `fn` gets whether it could be set, so
+-- a test can skip only the assertions that need it and still run the rest.
+local function with_winborder(value, fn)
+  if vim.fn.exists "+winborder" == 1 then
+    with_global_option("winborder", value, function()
+      fn(true)
+    end)
+  else
+    fn(false)
+  end
+end
+
+local function note_skipped(what)
+  vim.api.nvim_echo({ { ("[numb test] skipped on this Neovim: %s"):format(what), "WarningMsg" } }, false, {})
+end
+
+-- The float's title as plain text, "" when it has none. `nvim_win_get_config`
+-- reports a title as a list of `{ text, hl }` chunks.
+local function title_of(win)
+  local title = vim.api.nvim_win_get_config(win).title
+  if title == nil then
+    return ""
+  end
+  if type(title) == "string" then
+    return title
+  end
+  local parts = {}
+  for _, chunk in ipairs(title) do
+    table.insert(parts, type(chunk) == "table" and chunk[1] or chunk)
+  end
+  return table.concat(parts)
+end
+
+local NAMED_BORDERS = {
+  none = { "", "", "", "", "", "", "", "" },
+  single = { "┌", "─", "┐", "│", "┘", "─", "└", "│" },
+  rounded = { "╭", "─", "╮", "│", "╯", "─", "╰", "│" },
+}
+
+-- The float's border as its eight characters, clockwise from the top left
+-- corner, whichever shape `nvim_win_get_config` reports it in: nil or "none"
+-- for no border (it varies by version), a name, or a list with or without
+-- highlight groups.
+local function border_of(win)
+  local border = vim.api.nvim_win_get_config(win).border
+  if border == nil then
+    return NAMED_BORDERS.none
+  end
+  if type(border) == "string" then
+    return NAMED_BORDERS[border] or { border }
+  end
+  local chars = {}
+  for index = 1, 8 do
+    local char = border[(index - 1) % #border + 1]
+    chars[index] = type(char) == "table" and char[1] or char
+  end
+  return chars
+end
+
+-- Where the float's frame, border included, sits in the target window: "top"
+-- when flush with its top edge, "bottom" when flush with its bottom edge.
+local function edge_of(float, target)
+  local config = vim.api.nvim_win_get_config(float)
+  local border = border_of(float)
+  local frame_height = vim.api.nvim_win_get_height(float) + (border[2] ~= "" and 1 or 0) + (border[6] ~= "" and 1 or 0)
+  local frame_top = config.row
+  if config.anchor and config.anchor:sub(1, 1) == "S" then
+    frame_top = config.row - frame_height
+  end
+  if frame_top == 0 then
+    return "top", frame_height
+  end
+  if frame_top + frame_height == vim.api.nvim_win_get_height(target) then
+    return "bottom", frame_height
+  end
+  return ("row %s"):format(tostring(frame_top)), frame_height
+end
+
+local FLOAT_TARGET = 240
+local TALL_BUFFER_LINES = 500
+
+-- A tall buffer with the target window scrolled to the top, its cursor on line 5
+-- and its peek options set the opposite way a peek sets them, so any change the
+-- float strategy made to the target window would show. FLOAT_TARGET is far off
+-- screen, which is what a float is for.
+local function float_scene()
+  reset_tall_buffer()
+  local win = vim.api.nvim_get_current_win()
+  set_unpeeked_options()
+  local topline = pin_topline(win, 1)
+  vim.api.nvim_win_set_cursor(win, { 5, 0 })
+  assert(topline_of(win) == topline, "precondition: moving the cursor to line 5 did not scroll")
+  local last_visible = vim.api.nvim_win_call(win, function()
+    return vim.fn.line "w$"
+  end)
+  assert(last_visible < FLOAT_TARGET, ("precondition: line %d is off screen"):format(FLOAT_TARGET))
+  return {
+    win = win,
+    bufnr = vim.api.nvim_get_current_buf(),
+    topline = topline,
+    cursor = 5,
+    last_visible = last_visible,
+  }
+end
+
+local function assert_target_untouched(scene, label)
+  assert_unpeeked_options(scene.win, label)
+  assert(
+    cursor_of(scene.win) == scene.cursor,
+    ("%s: the target window's cursor must stay on %d, it is on %d"):format(label, scene.cursor, cursor_of(scene.win))
+  )
+  assert(
+    topline_of(scene.win) == scene.topline,
+    ("%s: the target window must not scroll, topline %d became %d"):format(label, scene.topline, topline_of(scene.win))
+  )
+  assert(vim.api.nvim_win_get_buf(scene.win) == scene.bufnr, ("%s: the target window keeps its buffer"):format(label))
+end
+
+-- The float shows the target buffer with its cursor on `line`, and `line` sits
+-- mid float whatever centered_peeking says: configure() turns it off.
+local function assert_float_shows(scene, float, line, label)
+  assert(vim.api.nvim_win_get_buf(float) == scene.bufnr, ("%s: the float must show the target buffer"):format(label))
+  assert(
+    cursor_of(float) == line,
+    ("%s: the float's cursor must be on %d, it is on %d"):format(label, line, cursor_of(float))
+  )
+  local height = vim.api.nvim_win_get_height(float)
+  assert(height >= 3, ("%s: the float must be at least 3 rows, it is %d"):format(label, height))
+  local offset = line - topline_of(float)
+  local middle = math.floor(height / 2)
+  assert(
+    math.abs(offset - middle) <= 1,
+    ("%s: line %d must sit mid float: topline %d, height %d, offset %d, expected about %d"):format(
+      label,
+      line,
+      topline_of(float),
+      height,
+      offset,
+      middle
+    )
+  )
+end
+
+function Tests.float_peek_shows_the_target_centered_in_a_float()
+  local numb = configure()
+  local scene = float_scene()
+  assert_no_float "precondition: nothing is floating before the peek"
+
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+
+  assert(peek:is_active(), "a float peek is active")
+  local float = the_float "peek(0, 240, { style = 'float' })"
+  local config = vim.api.nvim_win_get_config(float)
+  assert(
+    config.relative == "win" and config.win == scene.win,
+    ("the float is anchored to the target window, got relative %q, win %s"):format(
+      config.relative,
+      tostring(config.win)
+    )
+  )
+  assert(config.focusable == false, "the float is not focusable")
+  assert(
+    vim.api.nvim_win_get_width(float) == vim.api.nvim_win_get_width(scene.win),
+    ("the float spans the target window: width %d, expected %d"):format(
+      vim.api.nvim_win_get_width(float),
+      vim.api.nvim_win_get_width(scene.win)
+    )
+  )
+  assert_float_shows(scene, float, FLOAT_TARGET, "the float")
+  assert(vim.api.nvim_get_current_win() == scene.win, "the float does not take focus")
+
+  peek:cancel()
+end
+
+function Tests.float_peek_leaves_the_target_window_untouched()
+  local numb = configure()
+  local scene = float_scene()
+
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+
+  local float = the_float "precondition: the float peek opened a float"
+  assert_float_shows(scene, float, FLOAT_TARGET, "precondition")
+  assert_target_untouched(scene, "during a float peek")
+  assert(vim.w[scene.win].numb_peeking == true, "the target window carries the peeking flag")
+  assert(numb.is_peeking(scene.win), "is_peeking() reports the target window")
+  assert(numb.is_peeking(), "is_peeking() reports the current window, which is the target")
+  assert(vim.tbl_isempty(numb._state.win_states), "a float peek saves no window state")
+  -- The peek options go on the float instead.
+  assert(vim.wo[float].number == true, "show_numbers applies to the float")
+  assert(vim.wo[float].cursorline == true, "show_cursorline applies to the float")
+  assert(vim.wo[float].relativenumber == false, "hide_relativenumbers applies to the float")
+  assert(vim.wo[float].foldenable == false, "folds are disabled in the float")
+
+  peek:cancel()
+end
+
+function Tests.float_peek_cancel_closes_the_float()
+  local numb = configure()
+  local scene = float_scene()
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+  the_float "precondition: the float peek opened a float"
+
+  local cancelled = peek:cancel()
+
+  assert(cancelled == true, ("cancel() on a float peek returns true, got %s"):format(tostring(cancelled)))
+  assert_no_float "cancel() closes the float"
+  assert_target_untouched(scene, "after cancel()")
+  assert(vim.w[scene.win].numb_peeking == nil, "cancel() clears the peeking flag")
+  assert(not numb.is_peeking(scene.win), "is_peeking() is false after cancel()")
+  assert(not peek:is_active(), "the handle is inactive after cancel()")
+end
+
+function Tests.float_peek_accept_lands_in_the_target_window()
+  local numb = configure()
+  local scene = float_scene()
+  drain_scheduled(50)
+  vim.cmd "clearjumps"
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+  the_float "precondition: the float peek opened a float"
+  assert(cursor_of(scene.win) == scene.cursor, "precondition: the target window has not moved yet")
+
+  local accepted = peek:accept()
+
+  assert(accepted == true, ("accept() on a float peek returns true, got %s"):format(tostring(accepted)))
+  assert_no_float "accept() closes the float"
+  assert(cursor_of(scene.win) == FLOAT_TARGET, ("accept() lands on %d at once"):format(FLOAT_TARGET))
+  assert_unpeeked_options(scene.win, "accept() leaves the target window's options alone")
+  assert(vim.w[scene.win].numb_peeking == nil, "accept() clears the peeking flag")
+  assert(not peek:is_active(), "the handle is inactive after accept()")
+
+  drain_scheduled()
+  assert(cursor_of(scene.win) == FLOAT_TARGET, "nothing deferred moves the cursor after accept()")
+  vim.cmd "normal! \15"
+  assert(cursor_of(scene.win) == scene.cursor, "<C-o> after accept() returns to the origin")
+end
+
+-- Records, at every CmdlineChanged, what the float strategy looks like from
+-- outside: the command line, how many floats are open and where the target
+-- window's cursor is. Installed after numb's own handler, so it runs second.
+local function record_cmdline_snapshots(win, fn)
+  local snapshots = {}
+  local group = vim.api.nvim_create_augroup("numb_test_float_snapshots", { clear = true })
+  vim.api.nvim_create_autocmd("CmdlineChanged", {
+    group = group,
+    pattern = ":",
+    callback = function()
+      table.insert(snapshots, {
+        cmdline = vim.fn.getcmdline(),
+        floats = #float_windows(),
+        cursor = cursor_of(win),
+        number = vim.wo[win].number,
+        range = highlighted_range(vim.api.nvim_win_get_buf(win)),
+      })
+    end,
+  })
+  local ok, err = pcall(fn, snapshots)
+  vim.api.nvim_del_augroup_by_id(group)
+  if not ok then
+    error(err, 0)
+  end
+end
+
+local function last_snapshot(snapshots, cmdline)
+  assert(#snapshots > 0, ("no CmdlineChanged was observed for %q"):format(cmdline))
+  local last = snapshots[#snapshots]
+  assert(last.cmdline == cmdline, ("the last command line observed was %q, expected %q"):format(last.cmdline, cmdline))
+  return last
+end
+
+function Tests.float_peek_style_confirmed_command_line_lands_after_the_command()
+  local numb = configure { peek_style = "float" }
+  local scene = float_scene()
+  drain_scheduled(50)
+  vim.cmd "clearjumps"
+
+  record_cmdline_snapshots(scene.win, function(snapshots)
+    run_cmd ":240\r"
+    drain_scheduled()
+    local typed = last_snapshot(snapshots, "240")
+    assert(typed.floats == 1, ("typing :240 shows the target in one float, found %d"):format(typed.floats))
+    assert(typed.cursor == scene.cursor, "typing :240 does not move the target window")
+  end)
+
+  assert(cursor_of(scene.win) == FLOAT_TARGET, "the confirmed :240 lands on line 240")
+  assert_no_float "no float is left once the command ran"
+  assert(not numb.is_peeking(scene.win), "nothing is peeking after the command")
+  vim.cmd "normal! \15"
+  assert(cursor_of(scene.win) == scene.cursor, "<C-o> after the confirmed :240 returns to the origin")
+end
+
+function Tests.float_peek_style_abandoned_command_line_closes_the_float()
+  local numb = configure { peek_style = "float" }
+  local scene = float_scene()
+
+  record_cmdline_snapshots(scene.win, function(snapshots)
+    run_cmd ":240<C-c>"
+    local typed = last_snapshot(snapshots, "240")
+    assert(typed.floats == 1, ("typing :240 shows the target in one float, found %d"):format(typed.floats))
+  end)
+
+  assert_no_float "abandoning the command line closes the float"
+  assert_target_untouched(scene, "after <C-c>")
+  assert(not numb.is_peeking(scene.win), "nothing is peeking after <C-c>")
+end
+
+function Tests.float_peek_highlights_the_range_in_the_float()
+  local numb = configure()
+  local scene = float_scene()
+  assert(highlighted_range(scene.bufnr) == nil, "precondition: nothing is highlighted before the peek")
+
+  local peek = numb.peek(0, 235, { style = "float", range = { 235, 245 } })
+
+  local float = the_float "precondition: the ranged float peek opened a float"
+  assert_float_shows(scene, float, 235, "the ranged float")
+  local range = highlighted_range(scene.bufnr)
+  assert(range ~= nil, "a float peek with a range highlights it")
+  assert(range.count == 1, ("a range is exactly one extmark, found %d"):format(range.count))
+  assert(range[1] == 235 and range[2] == 245, ("expected range 235..245, got %d..%d"):format(range[1], range[2]))
+  assert_target_untouched(scene, "a ranged float peek")
+
+  peek:cancel()
+  assert(highlighted_range(scene.bufnr) == nil, "cancel() clears the range highlight")
+end
+
+function Tests.float_peek_style_command_line_range_is_highlighted()
+  configure { peek_style = "float" }
+  local scene = float_scene()
+
+  record_cmdline_snapshots(scene.win, function(snapshots)
+    run_cmd ":235,245<C-c>"
+    local typed = last_snapshot(snapshots, "235,245")
+    assert(typed.floats == 1, ("typing :235,245 shows one float, found %d"):format(typed.floats))
+    assert(
+      typed.range and typed.range[1] == 235 and typed.range[2] == 245,
+      ("typing :235,245 highlights 235..245, got %s"):format(vim.inspect(typed.range))
+    )
+    assert(typed.cursor == scene.cursor, "typing a range does not move the target window")
+  end)
+
+  assert(highlighted_range(scene.bufnr) == nil, "abandoning the command line clears the range")
+  assert_no_float "abandoning the command line closes the float"
+end
+
+function Tests.float_height_as_a_fraction_and_as_rows()
+  local heights = {}
+  for _, case in ipairs { { height = 0.5 }, { height = 6 } } do
+    local numb = configure { float = { height = case.height } }
+    local scene = float_scene()
+    local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+    local float = the_float(("height = %s"):format(case.height))
+    local height = vim.api.nvim_win_get_height(float)
+    local target_height = vim.api.nvim_win_get_height(scene.win)
+    peek:cancel()
+    if case.height < 1 then
+      assert(
+        math.abs(height - target_height * case.height) <= 1,
+        ("height = 0.5 is half the target window (%d rows), got %d rows"):format(target_height, height)
+      )
+    else
+      assert(height == case.height, ("height = 6 is 6 rows, got %d"):format(height))
+    end
+    table.insert(heights, height)
+  end
+  -- A float of one fixed size would satisfy either case alone on some screen.
+  assert(heights[1] ~= heights[2], ("the two settings must give different heights, both gave %d"):format(heights[1]))
+end
+
+function Tests.float_position_top_bottom_and_auto()
+  -- { position, cursor near the bottom of the view?, expected edge }
+  local cases = {
+    { "top", false, "top" },
+    { "bottom", false, "bottom" },
+    -- Honoured even though the strip then covers the cursor line.
+    { "bottom", true, "bottom" },
+    { "auto", false, "bottom" },
+    { "auto", true, "top" },
+  }
+  for _, case in ipairs(cases) do
+    local position, cursor_low, expected = case[1], case[2], case[3]
+    local label = ("position = %q with the cursor %s"):format(position, cursor_low and "low" or "high")
+    local numb = configure { float = { position = position } }
+    local scene = float_scene()
+    if cursor_low then
+      vim.api.nvim_win_set_cursor(scene.win, { scene.last_visible - 1, 0 })
+      assert(
+        topline_of(scene.win) == scene.topline,
+        ("precondition, %s: the cursor moved without scrolling"):format(label)
+      )
+    end
+    local cursor_row = vim.api.nvim_win_call(scene.win, vim.fn.winline)
+    local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+    local float = the_float(label)
+    local edge, frame_height = edge_of(float, scene.win)
+    local target_height = vim.api.nvim_win_get_height(scene.win)
+    peek:cancel()
+
+    -- Whether a strip on the bottom edge would cover the cursor line is what
+    -- "auto" decides on, so each case proves it tests the side it claims to.
+    local covered = cursor_row > target_height - frame_height
+    assert(
+      covered == cursor_low,
+      ("precondition, %s: cursor on row %d of %d, frame %d rows, covered %s"):format(
+        label,
+        cursor_row,
+        target_height,
+        frame_height,
+        tostring(covered)
+      )
+    )
+    assert(edge == expected, ("%s: the float sits at the %s, expected %s"):format(label, edge, expected))
+  end
+end
+
+-- Neovim works out whether a window has room for a winbar only when 'winbar'
+-- is set on it or globally, or when the window is entered. A float copies the
+-- local value of the window it opens from without that step, so an inherited
+-- winbar stays hidden until any of those happens, and a winbar plugin setting
+-- the global value makes it appear. Setting the global value to itself forces
+-- that step here, so what is checked is what the user would end up seeing.
+local function refresh_winbars()
+  vim.go.winbar = vim.go.winbar
+end
+
+function Tests.float_clears_a_window_local_winbar()
+  -- Floats never draw the global 'winbar', but a local one (what winbar
+  -- plugins set) is copied to a float and would take a row of the strip.
+  local numb = configure()
+  local scene = float_scene()
+  local saved = vim.api.nvim_get_option_value("winbar", { win = scene.win, scope = "local" })
+  vim.api.nvim_set_option_value("winbar", "numb test winbar", { win = scene.win, scope = "local" })
+  local ok, err = pcall(function()
+    local raw = vim.api.nvim_open_win(scene.bufnr, false, {
+      relative = "win",
+      win = scene.win,
+      row = 0,
+      col = 0,
+      width = 20,
+      height = 3,
+    })
+    refresh_winbars()
+    local raw_local = vim.api.nvim_get_option_value("winbar", { win = raw, scope = "local" })
+    local raw_draws = vim.fn.getwininfo(raw)[1].winbar
+    vim.api.nvim_win_close(raw, true)
+    assert(
+      raw_local == "numb test winbar" and raw_draws == 1,
+      ("precondition: a plain float opened from the window inherits and draws its winbar, got %q, drawn %d"):format(
+        raw_local,
+        raw_draws
+      )
+    )
+
+    local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+    local float = the_float "precondition: the float peek opened a float"
+    refresh_winbars()
+    local float_local = vim.api.nvim_get_option_value("winbar", { win = float, scope = "local" })
+    local float_draws = vim.fn.getwininfo(float)[1].winbar
+    peek:cancel()
+    assert(float_local == "", ("the float must clear its local winbar, it holds %q"):format(float_local))
+    assert(float_draws == 0, "the float must not draw a winbar")
+  end)
+  close_floats()
+  vim.api.nvim_set_option_value("winbar", saved, { win = scene.win, scope = "local" })
+  if not ok then
+    error(err, 0)
+  end
+end
+
+function Tests.float_default_border_is_a_top_edge_with_a_title()
+  local numb = configure()
+  with_winborder("", function()
+    local scene = float_scene()
+    local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+    local float = the_float "precondition: the float peek opened a float"
+
+    local border = border_of(float)
+    assert(border[2] ~= "", ("the default border has a top edge, got %s"):format(vim.inspect(border)))
+    for _, index in ipairs { 4, 5, 6, 7, 8 } do
+      assert(border[index] == "", ("the default border has only a top edge, got %s"):format(vim.inspect(border)))
+    end
+    local expected = ("%d/%d"):format(FLOAT_TARGET, TALL_BUFFER_LINES)
+    assert(
+      title_of(float):find(expected, 1, true) ~= nil,
+      ("the title shows %q, got %q"):format(expected, title_of(float))
+    )
+
+    peek:update(300)
+    assert(
+      title_of(float):find("300/500", 1, true) ~= nil,
+      ("update() retitles the float, got %q"):format(title_of(float))
+    )
+    assert_target_untouched(scene, "a float with the default border")
+    peek:cancel()
+  end)
+end
+
+function Tests.float_respects_winborder_and_shows_no_title_without_a_top_edge()
+  local numb = configure()
+  with_winborder("rounded", function(applied)
+    local scene = float_scene()
+    local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+    local float = the_float "winborder = rounded"
+    if applied then
+      local border = border_of(float)
+      assert(border[1] == "╭", ("the user's winborder is used, got %s"):format(vim.inspect(border)))
+      assert(
+        title_of(float):find(("%d/%d"):format(FLOAT_TARGET, TALL_BUFFER_LINES), 1, true) ~= nil,
+        ("a rounded border has a top edge, so it keeps the title, got %q"):format(title_of(float))
+      )
+    else
+      note_skipped "'winborder' does not exist, so it cannot be respected"
+    end
+    assert_target_untouched(scene, "a float under winborder = rounded")
+    peek:cancel()
+  end)
+
+  with_winborder("none", function(applied)
+    if not applied then
+      note_skipped "'winborder' does not exist, so winborder = none cannot be set"
+      return
+    end
+    float_scene()
+    local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+    local float = the_float "winborder = none"
+    assert(
+      border_of(float)[2] == "",
+      ("winborder = none gives no top edge, got %s"):format(vim.inspect(border_of(float)))
+    )
+    assert(title_of(float) == "", ("a border without a top edge carries no title, got %q"):format(title_of(float)))
+    peek:cancel()
+  end)
+end
+
+function Tests.float_win_config_result_wins()
+  local received
+  local numb = configure {
+    float = {
+      win_config = function(config)
+        received = vim.deepcopy(config)
+        config.border = "single"
+        config.row = 1
+        return config
+      end,
+    },
+  }
+  -- A winborder set by the user loses to win_config as well.
+  with_winborder("rounded", function()
+    local scene = float_scene()
+    local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+    local float = the_float "precondition: the float peek opened a float"
+
+    assert(type(received) == "table", "win_config is called with the computed config")
+    assert(
+      received.relative == "win" and received.win == scene.win,
+      ("win_config receives the config numb computed, got %s"):format(vim.inspect(received))
+    )
+    assert(border_of(float)[1] == "┌", ("win_config's border wins, got %s"):format(vim.inspect(border_of(float))))
+    assert(
+      vim.api.nvim_win_get_config(float).row == 1,
+      ("win_config's row wins, got %s"):format(tostring(vim.api.nvim_win_get_config(float).row))
+    )
+    peek:cancel()
+  end)
+end
+
+function Tests.float_peek_fires_no_window_or_buffer_autocommands()
+  local numb = configure()
+  local scene = float_scene()
+  local fired = {}
+  local group = vim.api.nvim_create_augroup("numb_test_float_autocmds", { clear = true })
+  vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter", "WinNew", "BufWinEnter" }, {
+    group = group,
+    callback = function(event)
+      table.insert(fired, event.event)
+    end,
+  })
+  local ok, err = pcall(function()
+    -- The counter has to see an ordinary window being opened, or staying at 0
+    -- below proves nothing. A tab page leaves the target window's size alone.
+    vim.cmd "tabnew"
+    vim.cmd "tabclose"
+    assert(#fired > 0, "precondition: opening a tab page fires the counted autocommands")
+    assert(vim.api.nvim_get_current_win() == scene.win, "precondition: back in the target window")
+    clear_events(fired)
+
+    local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+    the_float "precondition: the float peek opened a float"
+    peek:update(300)
+    assert(cursor_of(the_float "precondition: the float moved") == 300, "precondition: update() moved the float")
+    peek:cancel()
+    assert_no_float "precondition: cancel() closed the float"
+  end)
+  vim.api.nvim_del_augroup_by_id(group)
+  if not ok then
+    error(err, 0)
+  end
+  assert(#fired == 0, ("the float must open, move and close without autocommands, got %s"):format(vim.inspect(fired)))
+end
+
+function Tests.float_peek_events_report_the_target_window()
+  local numb = configure()
+  local scene = float_scene()
+
+  record_peek_events(function(events)
+    local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+    local float = the_float "precondition: the float peek opened a float"
+    local peeked = events_named(events, "NumbPeek")
+    assert(#events == 1 and #peeked == 1, ("a float peek fires NumbPeek once, got %d events"):format(#events))
+    local data = peeked[1].data
+    assert(data.win == scene.win, ("data.win is the target window, got %s"):format(tostring(data.win)))
+    assert(data.line == FLOAT_TARGET, ("data.line is the target line, got %s"):format(tostring(data.line)))
+    assert(data.float_win == float, ("data.float_win is the float, got %s"):format(tostring(data.float_win)))
+
+    clear_events(events)
+    peek:cancel()
+    local unpeeked = events_named(events, "NumbUnpeek")
+    assert(#events == 1 and #unpeeked == 1, ("cancel() fires NumbUnpeek once, got %d events"):format(#events))
+    assert(unpeeked[1].data.win == scene.win, "NumbUnpeek reports the target window")
+    assert(unpeeked[1].data.accepted == false, "cancel() reports accepted == false")
+  end)
+end
+
+function Tests.float_auto_switches_strategy_within_one_handle()
+  local numb = configure()
+  local scene = float_scene()
+
+  record_peek_events(function(events)
+    local peek = numb.peek(0, 2, { style = "auto" })
+    assert(peek:is_active(), "an auto peek is active")
+    assert_no_float "auto peeks an on-screen line in place"
+    assert(cursor_of(scene.win) == 2, "in place, the target window's cursor moves to line 2")
+    assert(vim.wo[scene.win].number == true, "in place, the target window gets the peek options")
+    assert(#events_named(events, "NumbPeek") == 1, "the first peek fires one NumbPeek")
+
+    clear_events(events)
+    assert(peek:update(FLOAT_TARGET) == true, "update() to an off-screen line returns true")
+    local float = the_float "auto peeks an off-screen line in a float"
+    assert_float_shows(scene, float, FLOAT_TARGET, "switched to a float")
+    assert_target_untouched(scene, "switching to a float puts the target window back first")
+    assert(vim.w[scene.win].numb_peeking == true, "the target window stays flagged across the switch")
+    assert(
+      #events_named(events, "NumbPeek") == 1 and #events_named(events, "NumbUnpeek") == 0,
+      ("switching to a float is one NumbPeek and no NumbUnpeek, got %s"):format(vim.inspect(events))
+    )
+
+    clear_events(events)
+    assert(peek:update(2) == true, "update() back to an on-screen line returns true")
+    assert_no_float "auto back on an on-screen line closes the float"
+    assert(cursor_of(scene.win) == 2, "back in place, the target window's cursor is on line 2")
+    assert(vim.wo[scene.win].number == true, "back in place, the target window has the peek options again")
+    assert(
+      #events_named(events, "NumbPeek") == 1 and #events_named(events, "NumbUnpeek") == 0,
+      ("switching back in place is one NumbPeek and no NumbUnpeek, got %s"):format(vim.inspect(events))
+    )
+
+    clear_events(events)
+    peek:cancel()
+    assert(
+      #events == 1 and #events_named(events, "NumbUnpeek") == 1,
+      ("cancel() after the switches fires one NumbUnpeek, got %s"):format(vim.inspect(events))
+    )
+  end)
+
+  assert_no_float "nothing floats after cancel()"
+  assert_target_untouched(scene, "cancel() after the switches")
+  assert(vim.w[scene.win].numb_peeking == nil, "cancel() clears the peeking flag")
+  assert(vim.tbl_isempty(numb._state.win_states), "no saved state is left")
+end
+
+function Tests.float_auto_peek_style_switches_while_typing()
+  configure { peek_style = "auto" }
+  local scene = float_scene()
+  assert(scene.last_visible < 24, "precondition: line 24 is off screen, so :24 floats too")
+
+  record_cmdline_snapshots(scene.win, function(snapshots)
+    -- "2", "24", "240", "24", "2": one command line peek throughout.
+    run_cmd ":240<BS><BS><C-c>"
+    local seen = vim.tbl_map(function(snapshot)
+      return snapshot.cmdline
+    end, snapshots)
+    assert(
+      vim.deep_equal(seen, { "2", "24", "240", "24", "2" }),
+      ("precondition: the command lines typed, got %s"):format(vim.inspect(seen))
+    )
+    local first, far, last = snapshots[1], snapshots[3], snapshots[5]
+    assert(first.floats == 0 and first.cursor == 2, (":2 peeks in place, got %s"):format(vim.inspect(first)))
+    assert(
+      far.floats == 1 and far.cursor == scene.cursor and far.number == false,
+      (":240 floats and leaves the target window alone, got %s"):format(vim.inspect(far))
+    )
+    assert(last.floats == 0 and last.cursor == 2, ("back to :2 peeks in place again, got %s"):format(vim.inspect(last)))
+  end)
+
+  assert_no_float "abandoning the command line closes any float"
+  assert_target_untouched(scene, "after <C-c>")
+end
+
+function Tests.float_closed_by_someone_else_ends_the_peek()
+  local numb = configure()
+  local scene = float_scene()
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+  local float = the_float "precondition: the float peek opened a float"
+
+  record_peek_events(function(events)
+    vim.api.nvim_win_close(float, true)
+    assert(not vim.api.nvim_win_is_valid(float), "precondition: the float is gone")
+
+    assert(not peek:is_active(), "closing the float deactivates the handle")
+    local unpeeked = events_named(events, "NumbUnpeek")
+    assert(#events == 1 and #unpeeked == 1, ("closing the float fires one NumbUnpeek, got %d events"):format(#events))
+    assert(unpeeked[1].data.win == scene.win, "NumbUnpeek reports the target window")
+    for _, method in ipairs { "update", "accept", "cancel" } do
+      local ok, result = pcall(peek[method], peek, 10)
+      assert(ok, ("%s() after the float closed must not raise: %s"):format(method, tostring(result)))
+      assert(result == false, ("%s() after the float closed returns false, got %s"):format(method, tostring(result)))
+    end
+    assert(#events == 1, ("nothing more fires once the peek ended, got %d events"):format(#events))
+  end)
+
+  assert_no_float "no other float was opened"
+  assert(vim.w[scene.win].numb_peeking == nil, "the target window loses the peeking flag")
+  assert(not numb.is_peeking(scene.win), "is_peeking() is false once the float closed")
+  assert(highlighted_range(scene.bufnr) == nil, "no range is left highlighted")
+  assert_target_untouched(scene, "after the float was closed")
+end
+
+function Tests.float_target_window_closed_closes_the_float()
+  local numb = configure()
+  float_scene()
+  local target = create_split()
+  local peek = numb.peek(target, FLOAT_TARGET, { style = "float" })
+  local float = the_float "precondition: the float peek opened a float"
+  assert(vim.api.nvim_win_get_config(float).win == target, "precondition: the float is anchored to the split")
+
+  record_peek_events(function(events)
+    vim.cmd "wincmd p"
+    vim.api.nvim_win_close(target, true)
+    assert(not vim.api.nvim_win_is_valid(target), "precondition: the target window is gone")
+
+    -- Neovim keeps a float whose anchor window closed, so numb has to close it.
+    assert_no_float "closing the target window closes the float"
+    assert(not peek:is_active(), "closing the target window deactivates the handle")
+    assert(
+      #events_named(events, "NumbUnpeek") == 1,
+      ("closing the target window fires one NumbUnpeek, got %s"):format(vim.inspect(events))
+    )
+  end)
+
+  close_other_windows()
+end
+
+function Tests.float_disable_closes_the_float()
+  local numb = configure()
+  local scene = float_scene()
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+  the_float "precondition: the float peek opened a float"
+
+  numb.disable()
+
+  assert_no_float "disable() closes the float"
+  assert(not peek:is_active(), "disable() deactivates the float handle")
+  assert(vim.w[scene.win].numb_peeking == nil, "disable() clears the peeking flag")
+  assert_target_untouched(scene, "after disable()")
+
+  numb.enable()
+end
+
+function Tests.float_update_reuses_the_float()
+  local numb = configure()
+  local scene = float_scene()
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+  local float = the_float "precondition: the float peek opened a float"
+
+  record_peek_events(function(events)
+    assert(peek:update(300) == true, "update() on a float peek returns true")
+    local moved = the_float "after update(300)"
+    assert(moved == float, ("update() moves the same float, %d became %d"):format(float, moved))
+    assert(cursor_of(float) == 300, ("the float now shows line 300, its cursor is on %d"):format(cursor_of(float)))
+    assert(peek:update(260) == true, "a second update() returns true")
+    assert(the_float "after update(260)" == float, "a second update() still moves the same float")
+
+    assert(#events_named(events, "NumbUnpeek") == 0, "moving the float must not end the peek")
+    assert(#events_named(events, "NumbPeek") == 2, ("each update() fires one NumbPeek, got %d"):format(#events))
+  end)
+
+  assert(peek:is_active(), "the handle is still active after the updates")
+  assert_target_untouched(scene, "after moving the float")
+  peek:cancel()
+end
+
+function Tests.float_peek_rejects_an_unknown_style()
+  local numb = configure()
+  local scene = float_scene()
+  -- A valid call first: without it, a missing or broken style option would make
+  -- the calls below fail for the wrong reason.
+  local valid = numb.peek(0, 10, { style = "float" })
+  the_float "precondition: a valid style opens a float"
+  valid:cancel()
+  assert_no_float "precondition: the valid peek was cancelled"
+
+  for _, style in ipairs { "bogus", "Float", 1, true } do
+    local ok = pcall(numb.peek, 0, 10, { style = style })
+    local label = ("style = %s"):format(vim.inspect(style))
+    assert(not ok, ("peek() must raise for %s"):format(label))
+    assert_no_float(("%s leaves no float"):format(label))
+    assert(not numb.is_peeking(scene.win), ("%s leaves no peek"):format(label))
+    assert(numb._state.active == nil, ("%s leaves no live handle"):format(label))
+    assert_target_untouched(scene, label)
+  end
+  assert(vim.tbl_isempty(numb._state.win_states), "rejected calls leave no saved state")
+end
+
+-- The cursor, `{ line, col }`, of a new window on `bufnr`, opened from a tab
+-- page of its own so the target window's size and view stay as they are.
+-- Neovim takes it from the position the buffer last had in a window that left
+-- it or closed, and closing a float records the float's own cursor there.
+local function cursor_a_new_window_opens_on(bufnr)
+  vim.cmd "tabnew"
+  local ok, result = pcall(function()
+    vim.cmd(("buffer %d"):format(bufnr))
+    return vim.api.nvim_win_get_cursor(0)
+  end)
+  pcall(vim.cmd, "tabclose!")
+  if not ok then
+    error(result, 0)
+  end
+  return result
+end
+
+-- The last line shown in a window.
+local function last_visible_of(win)
+  return vim.api.nvim_win_call(win, function()
+    return vim.fn.line "w$"
+  end)
+end
+
+-- The float's frame height: its content rows plus the rows its border draws.
+local function frame_height_of(float)
+  local border = border_of(float)
+  return vim.api.nvim_win_get_height(float) + (border[2] ~= "" and 1 or 0) + (border[6] ~= "" and 1 or 0)
+end
+
+function Tests.float_peek_style_confirmed_command_line_numb_unpeek_carries_no_float_win()
+  -- `:h numb-events`: `float_win` is `NumbPeek` only, "`NumbUnpeek` never
+  -- carries it, since the float is closed by then".
+  local numb = configure { peek_style = "float" }
+  local scene = float_scene()
+  drain_scheduled(50)
+
+  record_peek_events(function(events)
+    -- The handle's own ends first, which already keep to that.
+    local peek = numb.peek(0, FLOAT_TARGET)
+    the_float "precondition: peek_style = float opens a float"
+    peek:cancel()
+    peek = numb.peek(0, FLOAT_TARGET)
+    peek:accept()
+    for index, unpeeked in ipairs(events_named(events, "NumbUnpeek")) do
+      assert(
+        unpeeked.data.float_win == nil,
+        ("NumbUnpeek %d of the API carries no float_win, got %s"):format(index, tostring(unpeeked.data.float_win))
+      )
+    end
+    vim.api.nvim_win_set_cursor(scene.win, { scene.cursor, 0 })
+    clear_events(events)
+
+    run_cmd ":240\r"
+    drain_scheduled()
+
+    local peeked = events_named(events, "NumbPeek")
+    assert(#peeked > 0, "precondition: typing :240 fired NumbPeek")
+    local shown = peeked[#peeked].data.float_win
+    assert(shown ~= nil, "precondition: the NumbPeek of :240 carried the float as float_win")
+    local unpeeked = events_named(events, "NumbUnpeek")
+    assert(#unpeeked == 1, ("precondition: the confirmed :240 fired one NumbUnpeek, got %d"):format(#unpeeked))
+    assert(unpeeked[1].data.accepted == true, "precondition: the NumbUnpeek reports the command as accepted")
+    assert(not vim.api.nvim_win_is_valid(shown), "precondition: the float is closed by the time NumbUnpeek fires")
+    assert(
+      unpeeked[1].data.float_win == nil,
+      ("the NumbUnpeek of a confirmed command line carries no float_win, got %s"):format(
+        tostring(unpeeked[1].data.float_win)
+      )
+    )
+  end)
+  assert(cursor_of(scene.win) == FLOAT_TARGET, "the confirmed :240 still landed")
+end
+
+function Tests.float_whose_close_failed_is_still_closed_by_disable_and_seen_by_health()
+  local numb = configure()
+  local scene = float_scene()
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+  local float = the_float "precondition: the float peek opened a float"
+
+  local original_close = vim.api.nvim_win_close
+  local refused = false
+  local ok, err = pcall(function()
+    -- Refuses once, for the float only, as an autocommand raising while the
+    -- float closes would.
+    vim.api.nvim_win_close = function(win, force)
+      if win == float and not refused then
+        refused = true
+        error "numb test: closing the float failed"
+      end
+      return original_close(win, force)
+    end
+    pcall(peek.cancel, peek)
+    vim.api.nvim_win_close = original_close
+
+    assert(refused, "precondition: cancel() tried to close the float and the close failed")
+    assert(vim.api.nvim_win_is_valid(float), "precondition: the float is still open")
+    assert(not peek:is_active(), "precondition: the peek itself has ended")
+    local leftovers = require("numb.peek").leftover_floats()
+    assert(
+      vim.tbl_contains(leftovers, float),
+      ("the float left open is still known, so health can report it, got %s"):format(vim.inspect(leftovers))
+    )
+
+    numb.disable()
+    assert_no_float "disable() closes a float whose earlier close failed"
+    assert(vim.w[scene.win].numb_peeking == nil, "the target window is not left flagged")
+    numb.enable()
+  end)
+  vim.api.nvim_win_close = original_close
+  close_floats()
+  if not ok then
+    error(err, 0)
+  end
+end
+
+-- An OptionSet listener that closes every float once, the first time it fires
+-- while `armed`, standing in for a plugin reacting to the float's options.
+local OPTIONSET_CLOSING_FLOATS = [[
+vim.opt.runtimepath:append(vim.fn.getcwd())
+local numb = require "numb"
+numb.setup { centered_peeking = false }
+local lines = {}
+for i = 1, 500 do
+  lines[i] = ("line %03d"):format(i)
+end
+vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+vim.api.nvim_win_set_cursor(0, { 5, 0 })
+vim.wo.number = false
+vim.wo.cursorline = false
+vim.wo.relativenumber = true
+vim.wo.foldenable = true
+local win = vim.api.nvim_get_current_win()
+local report = { closed = 0 }
+local events = {}
+local recording = false
+vim.api.nvim_create_autocmd("User", {
+  pattern = { "NumbPeek", "NumbUnpeek" },
+  callback = function(event)
+    if recording then
+      table.insert(events, event.match)
+    end
+  end,
+})
+local function floats()
+  local found = {}
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_config(w).relative ~= "" then
+      table.insert(found, w)
+    end
+  end
+  return found
+end
+local armed = false
+vim.api.nvim_create_autocmd("OptionSet", {
+  callback = function()
+    if armed and not report.fired then
+      report.fired = true
+      for _, float in ipairs(floats()) do
+        vim.api.nvim_win_close(float, true)
+        report.closed = report.closed + 1
+      end
+    end
+  end,
+})
+]]
+
+local OPTIONSET_CLOSING_FLOATS_REPORT = [[
+report.call_ok = ok
+report.call_error = not ok and tostring(err) or nil
+report.still_active = handle ~= nil and handle:is_active()
+report.live = numb._state.active ~= nil
+report.floats = #floats()
+report.flagged = vim.w[win].numb_peeking ~= nil
+report.options = {
+  number = vim.wo[win].number,
+  cursorline = vim.wo[win].cursorline,
+  relativenumber = vim.wo[win].relativenumber,
+  foldenable = vim.wo[win].foldenable,
+}
+report.cursor = vim.api.nvim_win_get_cursor(win)[1]
+report.topline = vim.fn.line "w0"
+report.events = events
+io.stdout:write(vim.json.encode(report))
+]]
+
+local OPTIONSET_CLOSING_FLOATS_DURING_OPEN = OPTIONSET_CLOSING_FLOATS
+  .. [[
+report.topline_before = vim.fn.line "w0"
+recording = true
+armed = true
+local ok, handle = pcall(numb.peek, 0, 240, { style = "float" })
+local err = not ok and handle or nil
+handle = ok and handle or nil
+armed = false
+recording = false
+]]
+  .. OPTIONSET_CLOSING_FLOATS_REPORT
+
+local OPTIONSET_CLOSING_FLOATS_DURING_UPDATE = OPTIONSET_CLOSING_FLOATS
+  .. [[
+report.topline_before = vim.fn.line "w0"
+local handle = numb.peek(0, 240, { style = "float" })
+report.first_active = handle:is_active()
+report.first_floats = #floats()
+recording = true
+armed = true
+local ok, moved = pcall(handle.update, handle, 250)
+local err = not ok and moved or nil
+if ok then
+  report.moved = moved
+end
+armed = false
+recording = false
+]]
+  .. OPTIONSET_CLOSING_FLOATS_REPORT
+
+local function assert_float_closed_mid_step(report, label)
+  assert(report.fired, ("precondition, %s: a float option fired OptionSet while armed"):format(label))
+  assert(report.closed > 0, ("precondition, %s: the listener closed the float"):format(label))
+  assert(report.call_ok, ("%s must not raise: %s"):format(label, tostring(report.call_error)))
+  assert(not report.still_active, ("%s: the handle is inactive"):format(label))
+  assert(not report.live, ("%s: no peek is live"):format(label))
+  assert(report.floats == 0, ("%s: no float is left, found %d"):format(label, report.floats))
+  assert(not report.flagged, ("%s: the target window is not left flagged"):format(label))
+  local expected = { number = false, cursorline = false, relativenumber = true, foldenable = true }
+  assert(
+    vim.deep_equal(report.options, expected),
+    ("%s: the target window's options are untouched, got %s"):format(label, vim.inspect(report.options))
+  )
+  assert(report.cursor == 5, ("%s: the target window's cursor stays on 5, it is on %d"):format(label, report.cursor))
+  assert(
+    report.topline == report.topline_before,
+    ("%s: the target window did not scroll, topline %d became %d"):format(label, report.topline_before, report.topline)
+  )
+end
+
+function Tests.float_closed_by_an_optionset_listener_while_opening_leaves_an_inactive_handle()
+  local report = run_optionset_child(OPTIONSET_CLOSING_FLOATS_DURING_OPEN)
+
+  assert_float_closed_mid_step(report, "peek() whose float a listener closed")
+  assert(
+    vim.deep_equal(report.events, {}),
+    ("a float peek that never became live fires no event, got %s"):format(vim.inspect(report.events))
+  )
+end
+
+function Tests.float_closed_by_an_optionset_listener_while_moving_ends_the_peek()
+  local report = run_optionset_child(OPTIONSET_CLOSING_FLOATS_DURING_UPDATE)
+
+  assert(report.first_active and report.first_floats == 1, "precondition: the float peek is live before update()")
+  assert_float_closed_mid_step(report, "update() whose float a listener closed")
+  assert(
+    report.moved == false,
+    ("update() on a peek whose float closed mid-move returns false, got %s"):format(tostring(report.moved))
+  )
+  assert(
+    vim.deep_equal(report.events, { "NumbUnpeek" }),
+    ("the ended peek fires exactly one NumbUnpeek and no NumbPeek, got %s"):format(vim.inspect(report.events))
+  )
+end
+
+function Tests.float_peek_in_a_window_too_small_for_the_float_peeks_in_place()
+  local numb = configure()
+  reset_tall_buffer()
+  set_unpeeked_options()
+  vim.cmd "split"
+  local target = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_height(target, 2)
+  pin_topline(target, 1)
+  assert(vim.api.nvim_win_get_height(target) == 2, "precondition: the target window is 2 rows high")
+  local other = vim.fn.win_getid(vim.fn.winnr "j")
+  assert(other ~= 0 and other ~= target, "precondition: another window sits below the target")
+  assert_unpeeked_options(target, "precondition")
+
+  local peek = numb.peek(target, FLOAT_TARGET, { style = "float" })
+
+  assert(peek:is_active(), "the peek is active")
+  -- A float at least 3 rows high cannot fit a 2-row window, and one sticking out
+  -- of it would cover the window below.
+  assert_no_float "a window too small for a float peeks in place instead"
+  assert(cursor_of(target) == FLOAT_TARGET, "in place, the target window's cursor moves to the target")
+  assert(vim.wo[target].number == true, "in place, the target window gets the peek options")
+  assert(numb.is_peeking(target), "is_peeking() reports the target window")
+
+  peek:cancel()
+  assert_no_float "nothing floats after cancel()"
+  assert_unpeeked_options(target, "cancel() restores the in-place fallback")
+  assert(cursor_of(target) == 1, "cancel() puts the cursor back")
+  close_other_windows()
+end
+
+-- A float scene whose target window's cursor is on line 5, column 4, and whose
+-- buffer remembers that very position: the target window left the buffer and
+-- came back to it, which is when Neovim records where a window was.
+local function remembered_cursor_scene()
+  local scene = float_scene()
+  vim.api.nvim_win_set_cursor(scene.win, { 5, 4 })
+  local scratch = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_win_set_buf(scene.win, scratch)
+  vim.api.nvim_win_set_buf(scene.win, scene.bufnr)
+  vim.api.nvim_buf_delete(scratch, { force = true })
+  local cursor = vim.api.nvim_win_get_cursor(scene.win)
+  assert(
+    vim.deep_equal(cursor, { 5, 4 }),
+    ("precondition: back on its buffer, the target window's cursor is on { 5, 4 }, got %s"):format(vim.inspect(cursor))
+  )
+  return scene
+end
+
+function Tests.float_peek_leaves_no_last_position_behind_in_the_buffer()
+  local numb = configure()
+  -- Without any peek, a new window on the buffer opens where the target
+  -- window's cursor is, column included.
+  local baseline_scene = remembered_cursor_scene()
+  local baseline = cursor_a_new_window_opens_on(baseline_scene.bufnr)
+  assert(
+    vim.deep_equal(baseline, { 5, 4 }),
+    ("precondition: without a peek a new window opens on { 5, 4 }, got %s"):format(vim.inspect(baseline))
+  )
+
+  local scene = remembered_cursor_scene()
+  local peek = numb.peek(0, 150, { style = "float" })
+  local float = the_float "precondition: the float peek opened a float"
+  assert(cursor_of(float) == 150, "precondition: the float's cursor is on line 150")
+  peek:cancel()
+  assert_no_float "precondition: cancel() closed the float"
+  assert(
+    vim.deep_equal(vim.api.nvim_win_get_cursor(scene.win), { 5, 4 }),
+    "precondition: the target window's cursor is still on { 5, 4 }"
+  )
+
+  local reopened = cursor_a_new_window_opens_on(scene.bufnr)
+  assert(
+    vim.deep_equal(reopened, { 5, 4 }),
+    ("after a cancelled float peek a new window opens where the target window's cursor is, { 5, 4 }, got %s"):format(
+      vim.inspect(reopened)
+    )
+  )
+end
+
+function Tests.float_bottom_strip_ends_on_the_last_text_row_under_a_winbar()
+  local numb = configure { float = { position = "bottom" } }
+  local scene = float_scene()
+  local saved = vim.api.nvim_get_option_value("winbar", { win = scene.win, scope = "local" })
+  local ok, err = pcall(function()
+    -- The same check without a winbar first, so what is measured is known to
+    -- hold where the window has no winbar.
+    for _, winbar in ipairs { "", "numb test winbar" } do
+      vim.api.nvim_set_option_value("winbar", winbar, { win = scene.win, scope = "local" })
+      -- Drawn once before the peek, as a winbar the user sees has been: Neovim
+      -- places a float over a window's text only as that window was last drawn.
+      vim.cmd "redraw"
+      local label = winbar == "" and "without a winbar" or "under a winbar"
+      local draws = vim.fn.getwininfo(scene.win)[1].winbar
+      assert(
+        draws == (winbar == "" and 0 or 1),
+        ("precondition, %s: the target draws %d winbar rows"):format(label, draws)
+      )
+      local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+      local float = the_float(label)
+      vim.cmd "redraw"
+      -- Screen rows, 1-based. The target's outer height counts its winbar, so
+      -- its last text row is its last row.
+      local target_top = vim.fn.win_screenpos(scene.win)[1]
+      local last_text_row = target_top + vim.api.nvim_win_get_height(scene.win) - 1
+      local text_rows = vim.fn.getwininfo(scene.win)[1].height
+      assert(
+        last_text_row == target_top + draws + text_rows - 1,
+        ("precondition, %s: the target's last text row is %d"):format(label, last_text_row)
+      )
+      local frame_top = vim.fn.win_screenpos(float)[1]
+      local frame_bottom = frame_top + frame_height_of(float) - 1
+      peek:cancel()
+      assert(
+        frame_bottom == last_text_row,
+        ("%s, the bottom strip must end on the target's last text row %d, it ends on row %d"):format(
+          label,
+          last_text_row,
+          frame_bottom
+        )
+      )
+    end
+  end)
+  close_floats()
+  vim.api.nvim_set_option_value("winbar", saved, { win = scene.win, scope = "local" })
+  if not ok then
+    error(err, 0)
+  end
+end
+
+function Tests.float_auto_judges_the_clamped_line()
+  local numb = configure()
+  vim.cmd "enew!"
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "one", "two", "three" })
+  vim.bo.modified = false
+  local win = vim.api.nvim_get_current_win()
+  assert(last_visible_of(win) == 3, "precondition: all three lines are on screen")
+
+  local peek = numb.peek(0, 9999, { style = "auto" })
+
+  assert(peek:is_active(), "the auto peek is active")
+  assert_no_float "line 9999 clamps to line 3, which is on screen, so auto peeks in place"
+  assert(cursor_of(win) == 3, ("in place, the cursor is on the clamped line 3, it is on %d"):format(cursor_of(win)))
+  peek:cancel()
+  assert_no_float "nothing floats after cancel()"
+end
+
+function Tests.float_update_to_a_near_line_keeps_the_target_centered()
+  local numb = configure()
+  local scene = float_scene()
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+  local float = the_float "precondition: the float peek opened a float"
+  assert_float_shows(scene, float, FLOAT_TARGET, "precondition")
+  local near = FLOAT_TARGET + 2
+  local topline = topline_of(float)
+  -- A line already shown needs no scroll, so only centering can move the view.
+  assert(
+    near >= topline and near <= last_visible_of(float),
+    ("precondition: line %d is already shown in the float (%d..%d)"):format(near, topline, last_visible_of(float))
+  )
+
+  assert(peek:update(near) == true, "update() to a near line returns true")
+
+  assert(cursor_of(float) == near, ("the float's cursor moves to %d"):format(near))
+  assert(
+    topline_of(float) - topline == near - FLOAT_TARGET,
+    ("the float scrolls with the target to keep it centered: topline %d became %d"):format(topline, topline_of(float))
+  )
+  assert_float_shows(scene, float, near, "after the near update")
+  peek:cancel()
+end
+
+function Tests.float_auto_judges_visibility_on_the_view_before_the_in_place_peek()
+  local numb = configure { centered_peeking = true }
+  local scene = float_scene()
+  local near = scene.last_visible - 1
+
+  local peek = numb.peek(0, near, { style = "auto" })
+
+  assert_no_float(("precondition: line %d is on screen, so auto peeks in place"):format(near))
+  local scrolled_top = topline_of(scene.win)
+  local scrolled_last = last_visible_of(scene.win)
+  assert(scrolled_top > scene.topline, "precondition: centering the in-place peek scrolled the view")
+  -- On screen in the view the peek scrolled to, off screen in the user's own.
+  local between = scrolled_last
+  assert(
+    between > scene.last_visible,
+    ("precondition: line %d is off the user's screen (1..%d)"):format(between, scene.last_visible)
+  )
+
+  assert(peek:update(between) == true, "update() returns true")
+
+  local float = the_float(("line %d is off the screen the user left, so auto floats"):format(between))
+  assert(cursor_of(float) == between, ("the float shows line %d"):format(between))
+  assert(
+    topline_of(scene.win) == scene.topline,
+    ("the target window is back on topline %d, it is on %d"):format(scene.topline, topline_of(scene.win))
+  )
+  assert(cursor_of(scene.win) == scene.cursor, "the target window's cursor is back on its origin")
+  peek:cancel()
+  assert_no_float "nothing floats after cancel()"
+end
+
+function Tests.float_height_is_at_least_three_rows()
+  local numb = configure { float = { height = 0.1 } }
+  with_winborder("", function()
+    reset_tall_buffer()
+    vim.cmd "split"
+    local target = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_height(target, 6)
+    assert(vim.api.nvim_win_get_height(target) == 6, "precondition: the target window is 6 rows high")
+    assert(math.floor(6 * 0.1) < 3, "precondition: a tenth of 6 rows is under 3 rows")
+
+    local peek = numb.peek(target, FLOAT_TARGET, { style = "float" })
+    local float = the_float "precondition: the float peek opened a float"
+    local height = vim.api.nvim_win_get_height(float)
+    peek:cancel()
+
+    assert(height == 3, ("a float is at least 3 content rows, got %d"):format(height))
+  end)
+  close_other_windows()
+end
+
+function Tests.float_win_config_returning_nil_keeps_numbs_config_and_runs_on_every_update()
+  local calls = 0
+  local numb = configure {
+    float = {
+      win_config = function()
+        calls = calls + 1
+      end,
+    },
+  }
+  with_winborder("", function()
+    local scene = float_scene()
+    local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+    local float = the_float "win_config returning nil"
+
+    assert(calls == 1, ("win_config is called once to open the float, got %d"):format(calls))
+    local config = vim.api.nvim_win_get_config(float)
+    assert(config.relative == "win" and config.win == scene.win, "numb's own config is used: anchored to the target")
+    assert(edge_of(float, scene.win) == "bottom", "numb's own config is used: on the bottom edge")
+    assert(
+      title_of(float):find(("%d/%d"):format(FLOAT_TARGET, TALL_BUFFER_LINES), 1, true) ~= nil,
+      ("numb's own config is used: the title, got %q"):format(title_of(float))
+    )
+
+    assert(peek:update(300) == true, "update() returns true")
+    assert(calls == 2, ("win_config is called again on update(), got %d calls"):format(calls))
+    assert(title_of(float):find("300/500", 1, true) ~= nil, "update() still retitles the float")
+    assert_target_untouched(scene, "a float under a win_config returning nil")
+    peek:cancel()
+  end)
+end
+
+function Tests.float_respects_a_winborder_given_as_a_list_of_characters()
+  if vim.fn.exists "+winborder" == 0 then
+    note_skipped "'winborder' does not exist, so a list of characters cannot be set"
+    return
+  end
+  local list = "a,b,c,d,e,f,g,h"
+  local saved = vim.go.winborder
+  local accepted = pcall(function()
+    vim.go.winborder = list
+  end)
+  vim.go.winborder = saved
+  if not accepted then
+    note_skipped "this 'winborder' takes no list of characters"
+    return
+  end
+
+  local numb = configure()
+  with_winborder(list, function()
+    float_scene()
+    local ok, peek = pcall(numb.peek, 0, FLOAT_TARGET, { style = "float" })
+    assert(ok, ("peek() under winborder = %q must not raise: %s"):format(list, tostring(peek)))
+    local float = the_float(("winborder = %q"):format(list))
+    local border = border_of(float)
+    assert(
+      vim.deep_equal(border, vim.split(list, ",", { plain = true })),
+      ("the listed characters are the border, got %s"):format(vim.inspect(border))
+    )
+    assert(
+      title_of(float):find(("%d/%d"):format(FLOAT_TARGET, TALL_BUFFER_LINES), 1, true) ~= nil,
+      ("the list has a top edge, so the title stays, got %q"):format(title_of(float))
+    )
+    peek:cancel()
+  end)
+end
+
+function Tests.float_update_rejects_a_style()
+  local numb = configure()
+  local scene = float_scene()
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+  local float = the_float "precondition: the float peek opened a float"
+  assert(peek:update(250) == true, "precondition: update() without a style moves the peek")
+
+  local ok = pcall(peek.update, peek, 12, { style = "window" })
+
+  assert(not ok, "update() must raise for opts.style, which only peek() takes")
+  assert(peek:is_active(), "the rejected update() leaves the peek live")
+  assert(the_float "after the rejected update()" == float, "the same float is still shown")
+  assert(cursor_of(float) == 250, ("the rejected update() moved nothing, the float is on %d"):format(cursor_of(float)))
+  assert_target_untouched(scene, "after the rejected update()")
+  peek:cancel()
+end
+
+function Tests.float_win_config_returning_a_non_table_raises_a_named_error()
+  local numb = configure {
+    float = {
+      win_config = function()
+        return 5
+      end,
+    },
+  }
+  local scene = float_scene()
+
+  local ok, err = pcall(numb.peek, 0, FLOAT_TARGET, { style = "float" })
+
+  assert(not ok, "peek() must raise when win_config returns neither a table nor nil")
+  assert(
+    tostring(err):find("float.win_config", 1, true) ~= nil,
+    ("the error names the float.win_config option, got %q"):format(tostring(err))
+  )
+  assert_no_float "the rejected config leaves no float"
+  assert(numb._state.active == nil, "the rejected config leaves no live peek")
+  assert(vim.w[scene.win].numb_peeking == nil, "the rejected config leaves the target unflagged")
+  assert_target_untouched(scene, "after the rejected config")
+end
+
+function Tests.float_api_accept_records_the_target_windows_cursor_at_accept_time()
+  local numb = configure()
+  local scene = float_scene()
+  drain_scheduled(50)
+  vim.cmd "clearjumps"
+  local peek = numb.peek(0, 200, { style = "float" })
+  the_float "precondition: the float peek opened a float"
+
+  -- The float leaves the target window alone, so it can move while the peek
+  -- lasts; the jump starts from wherever it is when the peek is accepted.
+  vim.api.nvim_win_set_cursor(scene.win, { 20, 0 })
+  assert(peek:is_active(), "precondition: moving the target window's cursor keeps the float peek")
+  assert(peek:accept() == true, "accept() returns true")
+
+  assert(cursor_of(scene.win) == 200, "accept() lands on 200")
+  drain_scheduled()
+  vim.cmd "normal! \15"
+  assert(
+    cursor_of(scene.win) == 20,
+    ("<C-o> after accept() returns to line 20, where the cursor was, got %d"):format(cursor_of(scene.win))
+  )
+end
+
+-- A `float.win_config` that only swaps numb's top edge for a full rounded
+-- border, two rows and two columns more than numb's own.
+local function rounded_border(win_config)
+  win_config.border = "rounded"
+  return win_config
+end
+
+-- The float's frame, border included, in the target window's text coordinates:
+-- its first row and column and its height and width.
+local function frame_of(float)
+  local config = vim.api.nvim_win_get_config(float)
+  assert(
+    config.anchor == nil or config.anchor == "NW",
+    ("precondition: the float is anchored by its top left corner, got %s"):format(tostring(config.anchor))
+  )
+  local border = border_of(float)
+  return {
+    row = config.row,
+    col = config.col,
+    height = frame_height_of(float),
+    width = vim.api.nvim_win_get_width(float) + (border[8] ~= "" and 1 or 0) + (border[4] ~= "" and 1 or 0),
+  }
+end
+
+-- A split of the tall buffer whose target window is exactly `rows` rows of
+-- text high, its cursor on line 5 and its view pinned at the top.
+local function float_split_of_height(rows)
+  reset_tall_buffer()
+  set_unpeeked_options()
+  vim.cmd "split"
+  local target = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_height(target, rows)
+  pin_topline(target, 1)
+  vim.api.nvim_win_set_cursor(target, { 5, 0 })
+  assert(
+    vim.fn.getwininfo(target)[1].height == rows,
+    ("precondition: the target window is %d rows of text high"):format(rows)
+  )
+  return target
+end
+
+function Tests.float_frame_under_a_win_config_border_stays_inside_the_target_rows()
+  local numb = configure { float = { win_config = rounded_border } }
+  with_winborder("", function()
+    local target = float_split_of_height(20)
+    local rows = vim.fn.getwininfo(target)[1].height
+    local peek = numb.peek(target, FLOAT_TARGET, { style = "float" })
+    local float = the_float "precondition: the float peek opened a float"
+    assert(border_of(float)[6] ~= "", "precondition: the rounded border draws a bottom edge")
+
+    for _, step in ipairs { "peek()", "update(300)" } do
+      if step == "update(300)" then
+        assert(peek:update(300) == true, "precondition: update(300) moves the peek")
+      end
+      local frame = frame_of(float)
+      assert(frame.row >= 0, ("after %s the frame starts inside the target, on row %d"):format(step, frame.row))
+      assert(
+        frame.row + frame.height <= rows,
+        ("after %s the frame, border included, ends inside the target's %d rows: rows %d..%d"):format(
+          step,
+          rows,
+          frame.row,
+          frame.row + frame.height - 1
+        )
+      )
+    end
+    peek:cancel()
+  end)
+  close_other_windows()
+end
+
+function Tests.float_frame_under_a_win_config_border_stays_inside_the_target_columns()
+  local numb = configure { float = { win_config = rounded_border } }
+  with_winborder("", function()
+    reset_tall_buffer()
+    local target = create_split()
+    vim.api.nvim_win_set_width(target, 40)
+    local columns = vim.api.nvim_win_get_width(target)
+    assert(columns == 40, ("precondition: the target window is 40 columns wide, got %d"):format(columns))
+
+    local peek = numb.peek(target, FLOAT_TARGET, { style = "float" })
+    local float = the_float "precondition: the float peek opened a float"
+    local border = border_of(float)
+    assert(border[4] ~= "" and border[8] ~= "", "precondition: the rounded border draws both side edges")
+    local frame = frame_of(float)
+    peek:cancel()
+
+    assert(frame.col >= 0, ("the frame starts inside the target, on column %d"):format(frame.col))
+    assert(
+      frame.col + frame.width <= columns,
+      ("the frame, border included, ends inside the target's %d columns: columns %d..%d"):format(
+        columns,
+        frame.col,
+        frame.col + frame.width - 1
+      )
+    )
+  end)
+  close_other_windows()
+end
+
+function Tests.float_peek_in_a_window_too_small_for_a_win_config_border_peeks_in_place()
+  local numb = configure { float = { win_config = rounded_border } }
+  with_winborder("", function()
+    -- 3 rows of text and a rounded border's 2 rows need 5; numb's own top edge
+    -- would fit in 4.
+    local target = float_split_of_height(4)
+
+    local peek = numb.peek(target, FLOAT_TARGET, { style = "float" })
+
+    assert(peek:is_active(), "the peek is active")
+    assert_no_float "a float with its win_config border does not fit 4 rows, so it peeks in place"
+    assert(cursor_of(target) == FLOAT_TARGET, "in place, the target window's cursor moves to the target")
+    assert(vim.wo[target].number == true, "in place, the target window gets the peek options")
+    peek:cancel()
+    assert_unpeeked_options(target, "cancel() restores the in-place fallback")
+  end)
+  close_other_windows()
+end
+
+function Tests.float_win_config_setting_row_and_width_keeps_them()
+  local numb = configure {
+    float = {
+      win_config = function(win_config)
+        win_config.border = "rounded"
+        win_config.row = 2
+        win_config.width = 10
+        return win_config
+      end,
+    },
+  }
+  with_winborder("", function()
+    local target = float_split_of_height(20)
+    local peek = numb.peek(target, FLOAT_TARGET, { style = "float" })
+    local float = the_float "precondition: the float peek opened a float"
+
+    for _, step in ipairs { "peek()", "update(300)" } do
+      if step == "update(300)" then
+        assert(peek:update(300) == true, "precondition: update(300) moves the peek")
+      end
+      local config = vim.api.nvim_win_get_config(float)
+      assert(config.row == 2, ("after %s the row win_config set stays 2, got %s"):format(step, tostring(config.row)))
+      assert(
+        vim.api.nvim_win_get_width(float) == 10,
+        ("after %s the width win_config set stays 10, got %d"):format(step, vim.api.nvim_win_get_width(float))
+      )
+    end
+    peek:cancel()
+  end)
+  close_other_windows()
+end
+
+function Tests.float_peek_with_the_default_border_needs_four_rows()
+  local numb = configure()
+  with_winborder("", function()
+    -- 3 rows of text and numb's top edge: a 3-row window is one row short.
+    local small = float_split_of_height(3)
+    local peek = numb.peek(small, FLOAT_TARGET, { style = "float" })
+    assert(peek:is_active(), "the peek in 3 rows is active")
+    assert_no_float "a 3-row window has no room for 3 rows and a top edge, so it peeks in place"
+    assert(cursor_of(small) == FLOAT_TARGET, "in place, the 3-row window's cursor moves to the target")
+    peek:cancel()
+    assert_unpeeked_options(small, "cancel() restores the 3-row window")
+    close_other_windows()
+
+    local fitting = float_split_of_height(4)
+    peek = numb.peek(fitting, FLOAT_TARGET, { style = "float" })
+    local float = the_float "a 4-row window holds 3 rows and a top edge, so it floats"
+    assert(frame_height_of(float) == 4, ("the float fills the 4 rows, frame height %d"):format(frame_height_of(float)))
+    assert(cursor_of(fitting) == 5, "the 4-row window's cursor stays where it was")
+    peek:cancel()
+  end)
+  close_other_windows()
+end
+
+-- Every window option a float can leave behind in its buffer: Neovim keeps the
+-- options of the last window that closed on a buffer and gives them to the next
+-- window opened on it.
+local LEAKABLE_WINDOW_OPTIONS = {
+  "number",
+  "relativenumber",
+  "cursorline",
+  "cursorcolumn",
+  "foldenable",
+  "foldcolumn",
+  "signcolumn",
+  "colorcolumn",
+  "statuscolumn",
+  "spell",
+  "list",
+  "fillchars",
+  "winbar",
+}
+
+local function window_options_of(win)
+  local values = {}
+  for _, option in ipairs(LEAKABLE_WINDOW_OPTIONS) do
+    values[option] = vim.api.nvim_get_option_value(option, { win = win })
+  end
+  return values
+end
+
+-- The window options of a new window on `bufnr`, opened from a tab page of its
+-- own as `cursor_a_new_window_opens_on` does.
+local function options_a_new_window_opens_with(bufnr)
+  vim.cmd "tabnew"
+  local ok, result = pcall(function()
+    vim.cmd(("buffer %d"):format(bufnr))
+    return window_options_of(0)
+  end)
+  pcall(vim.cmd, "tabclose!")
+  if not ok then
+    error(result, 0)
+  end
+  return result
+end
+
+-- A float scene whose target window's options differ from the ones a float
+-- peek and its minimal style set, so a leak of any of them would show.
+local function option_leak_scene()
+  local scene = float_scene()
+  vim.wo[scene.win].number = false
+  vim.wo[scene.win].cursorline = false
+  vim.wo[scene.win].foldenable = true
+  vim.wo[scene.win].list = true
+  vim.wo[scene.win].signcolumn = "yes"
+  scene.options = window_options_of(scene.win)
+  return scene
+end
+
+local function assert_no_option_leak(numb, label)
+  -- Without any peek, a new window on the buffer has the target's options.
+  local baseline_scene = option_leak_scene()
+  local baseline = options_a_new_window_opens_with(baseline_scene.bufnr)
+  assert(
+    vim.deep_equal(baseline, baseline_scene.options),
+    ("precondition, %s: without a peek a new window has the target's options %s, got %s"):format(
+      label,
+      vim.inspect(baseline_scene.options),
+      vim.inspect(baseline)
+    )
+  )
+
+  local scene = option_leak_scene()
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+  local float = the_float(("precondition, %s: the float peek opened a float"):format(label))
+  assert(
+    vim.wo[float].number == true and vim.wo[float].foldenable == false,
+    ("precondition, %s: the float has its peek options"):format(label)
+  )
+  peek:cancel()
+  assert_no_float(("precondition, %s: cancel() closed the float"):format(label))
+
+  local reopened = options_a_new_window_opens_with(scene.bufnr)
+  for _, option in ipairs(LEAKABLE_WINDOW_OPTIONS) do
+    assert(
+      vim.deep_equal(reopened[option], scene.options[option]),
+      ("%s: after a float peek a new window has the target's %s = %s, got %s"):format(
+        label,
+        option,
+        vim.inspect(scene.options[option]),
+        vim.inspect(reopened[option])
+      )
+    )
+  end
+end
+
+-- Leaks on 0.10 and 0.11. Neovim 0.12 no longer records the options of a float
+-- opened with `style = "minimal"`, so there this holds whatever numb does; the
+-- test below covers 0.12 too.
+function Tests.float_peek_leaves_no_window_options_behind_in_the_buffer()
+  local numb = configure()
+  with_winborder("", function()
+    assert_no_option_leak(numb, "the default float")
+  end)
+end
+
+-- Every version: without `style = "minimal"`, 0.12 records the float's options
+-- as well.
+function Tests.float_peek_without_minimal_style_leaves_no_window_options_behind()
+  local numb = configure {
+    float = {
+      win_config = function(win_config)
+        win_config.style = nil
+        return win_config
+      end,
+    },
+  }
+  with_winborder("", function()
+    assert_no_option_leak(numb, "a float without minimal style")
+  end)
+end
+
+local FLOAT_CREATES_NO_BUFFER = [[
+vim.opt.runtimepath:append(vim.fn.getcwd())
+local numb = require "numb"
+numb.setup { centered_peeking = false }
+local lines = {}
+for i = 1, 500 do
+  lines[i] = ("line %03d"):format(i)
+end
+vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+vim.api.nvim_win_set_cursor(0, { 5, 0 })
+local report = {}
+local created = 0
+vim.api.nvim_create_autocmd("BufNew", {
+  callback = function()
+    created = created + 1
+  end,
+})
+local function floats()
+  local found = 0
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_config(w).relative ~= "" then
+      found = found + 1
+    end
+  end
+  return found
+end
+-- The counter sees a buffer being made at all.
+local proof = vim.api.nvim_create_buf(false, true)
+report.proof_created = created
+vim.api.nvim_buf_delete(proof, { force = true })
+created = 0
+
+report.bufs_before = #vim.api.nvim_list_bufs()
+report.last_before = vim.fn.bufnr "$"
+local handle = numb.peek(0, 240, { style = "float" })
+report.active = handle:is_active()
+report.floats = floats()
+report.moved = handle:update(300)
+handle:cancel()
+handle = numb.peek(0, 200, { style = "float" })
+report.second_active = handle:is_active()
+handle:accept()
+report.floats_after = floats()
+report.created = created
+report.bufs_after = #vim.api.nvim_list_bufs()
+report.last_after = vim.fn.bufnr "$"
+io.stdout:write(vim.json.encode(report))
+]]
+
+-- In a child Neovim, a session of its own: anything numb makes once per session
+-- would already exist in this one.
+function Tests.float_peek_creates_no_buffer()
+  local report = run_optionset_child(FLOAT_CREATES_NO_BUFFER)
+
+  assert(
+    report.proof_created == 1,
+    ("precondition: BufNew fired for a new buffer, %d times"):format(report.proof_created)
+  )
+  assert(report.active and report.floats == 1, "precondition: the float peek opened a float")
+  assert(report.moved == true, "precondition: update() moved the float peek")
+  assert(report.second_active, "precondition: the second float peek is active")
+  assert(report.floats_after == 0, ("precondition: no float is left, found %d"):format(report.floats_after))
+  assert(report.created == 0, ("a float peek fires no BufNew, it fired %d"):format(report.created))
+  assert(
+    report.bufs_after == report.bufs_before,
+    ("a float peek leaves the buffer list as it was, %d buffers became %d"):format(
+      report.bufs_before,
+      report.bufs_after
+    )
+  )
+  assert(
+    report.last_after == report.last_before,
+    ("a float peek uses no buffer number, bufnr('$') %d became %d"):format(report.last_before, report.last_after)
+  )
+end
+
+-- Replace `nvim_win_close` for `fn`, refusing to close `float` the first
+-- `refusals` times, as an autocommand raising while it closes would. Returns
+-- how many times it refused.
+local function with_refused_float_close(float, refusals, fn)
+  local original_close = vim.api.nvim_win_close
+  local refused = 0
+  vim.api.nvim_win_close = function(win, force)
+    if win == float and refused < refusals then
+      refused = refused + 1
+      error "numb test: closing the float failed"
+    end
+    return original_close(win, force)
+  end
+  local ok, err = pcall(fn, function()
+    return refused
+  end)
+  vim.api.nvim_win_close = original_close
+  close_floats()
+  if not ok then
+    error(err, 0)
+  end
+end
+
+function Tests.float_whose_close_failed_twice_is_still_closed_by_a_later_reset()
+  local numb = configure()
+  local scene = float_scene()
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+  local float = the_float "precondition: the float peek opened a float"
+
+  with_refused_float_close(float, 2, function(refused)
+    pcall(peek.cancel, peek)
+    assert(refused() == 1, "precondition: cancel() tried to close the float and the close failed")
+
+    numb.disable()
+    assert(refused() == 2, "precondition: disable() tried to close the float again and the close failed")
+    assert(vim.api.nvim_win_is_valid(float), "precondition: the float is still open")
+    local leftovers = require("numb.peek").leftover_floats()
+    assert(
+      vim.tbl_contains(leftovers, float),
+      ("a float whose close failed during reset is still known, got %s"):format(vim.inspect(leftovers))
+    )
+
+    numb.disable()
+    assert_no_float "the next disable() closes the float at last"
+    assert(vim.tbl_isempty(require("numb.peek").leftover_floats()), "nothing is left over once the float closed")
+    assert(vim.w[scene.win].numb_peeking == nil, "the target window is not left flagged")
+    numb.enable()
+  end)
+end
+
+function Tests.float_left_open_by_an_auto_switch_is_a_leftover_while_the_peek_is_live()
+  local numb = configure()
+  local scene = float_scene()
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "auto" })
+  local float = the_float "precondition: auto floats an off-screen line"
+
+  with_refused_float_close(float, 1, function(refused)
+    -- Line 3 is on screen, so auto switches to peeking in place and closes
+    -- the float, which fails.
+    pcall(peek.update, peek, 3)
+    assert(refused() == 1, "precondition: switching to an in-place peek tried to close the float and failed")
+    assert(vim.api.nvim_win_is_valid(float), "precondition: the float is still open")
+    assert(numb._state.active == peek, "precondition: the handle is still the live peek")
+
+    local leftovers = require("numb.peek").leftover_floats()
+    assert(
+      vim.tbl_contains(leftovers, float),
+      ("a float numb is closing is a leftover even while its handle is live, got %s"):format(vim.inspect(leftovers))
+    )
+
+    numb.disable()
+    assert_no_float "disable() closes the float"
+    numb.enable()
+  end)
+  assert(vim.w[scene.win].numb_peeking == nil, "the target window is not left flagged")
+end
+
+local OPTIONSET_CLOSING_THE_TARGET = [[
+vim.opt.runtimepath:append(vim.fn.getcwd())
+local numb = require "numb"
+numb.setup { centered_peeking = true }
+local lines = {}
+for i = 1, 500 do
+  lines[i] = ("line %03d"):format(i)
+end
+vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+vim.cmd "split"
+local win = vim.api.nvim_get_current_win()
+vim.api.nvim_win_set_cursor(win, { 1, 0 })
+local report = { fired = false }
+local events = {}
+local recording = false
+vim.api.nvim_create_autocmd("User", {
+  pattern = { "NumbPeek", "NumbUnpeek" },
+  callback = function(event)
+    if recording then
+      table.insert(events, event.match)
+    end
+  end,
+})
+local armed = false
+vim.api.nvim_create_autocmd("OptionSet", {
+  pattern = "scrolloff",
+  callback = function()
+    if armed and not report.fired then
+      report.fired = true
+      report.closed = pcall(vim.api.nvim_win_close, win, true)
+    end
+  end,
+})
+recording = true
+armed = true
+local ok, handle = pcall(numb.peek, 0, 30)
+armed = false
+recording = false
+report.call_ok = ok
+report.call_error = not ok and tostring(handle) or nil
+report.still_active = ok and handle:is_active()
+report.live = numb._state.active ~= nil
+report.target_valid = vim.api.nvim_win_is_valid(win)
+report.saved = vim.tbl_count(numb._state.win_states)
+report.events = events
+io.stdout:write(vim.json.encode(report))
+]]
+
+function Tests.api_peek_whose_window_an_optionset_listener_closes_while_centering_is_inactive()
+  local report = run_optionset_child(OPTIONSET_CLOSING_THE_TARGET)
+
+  assert(report.fired, "precondition: centering the peek set 'scrolloff' and fired OptionSet")
+  assert(report.closed and not report.target_valid, "precondition: the listener closed the target window")
+  assert(report.call_ok, ("peek() must not raise: %s"):format(tostring(report.call_error)))
+  assert(not report.still_active, "the handle of a peek whose window closed is inactive")
+  assert(not report.live, "no peek is live")
+  assert(
+    vim.deep_equal(report.events, {}),
+    ("a peek that never became live fires no event, got %s"):format(vim.inspect(report.events))
+  )
+  assert(report.saved == 0, ("no saved state is left, win_states holds %d"):format(report.saved))
+end
+
+-- The row of text a window's cursor is on, counted from 1 as `winline()` does.
+local function winline_of(win)
+  return vim.api.nvim_win_call(win, vim.fn.winline)
+end
+
+function Tests.float_whose_close_failed_never_lands_on_a_later_command_line()
+  local numb = configure { peek_style = "float" }
+  local scene = float_scene()
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+  local float = the_float "precondition: the float peek opened a float"
+
+  with_refused_float_close(float, 2, function(refused)
+    pcall(peek.cancel, peek)
+    assert(refused() == 1, "precondition: cancel() tried to close the float and the close failed")
+    numb.disable()
+    assert(refused() == 2, "precondition: disable() tried to close the float again and the close failed")
+    assert(vim.api.nvim_win_is_valid(float), "precondition: the float is still open")
+    assert(
+      vim.tbl_contains(require("numb.peek").leftover_floats(), float),
+      "precondition: the float left open is a leftover"
+    )
+    numb.enable()
+    assert(cursor_of(scene.win) == scene.cursor, "precondition: the target window is still on its origin")
+
+    local observed = confirm_cmdline ":12"
+    drain_scheduled()
+
+    assert(observed.peeking, "precondition: :12 peeked while it was being typed")
+    assert(
+      cursor_of(scene.win) == 12,
+      ("the confirmed :12 lands on 12, not on the ended peek's %d, the cursor is on %d"):format(
+        FLOAT_TARGET,
+        cursor_of(scene.win)
+      )
+    )
+    assert(not vim.api.nvim_win_is_valid(float), "leaving the command line closes the leftover float at last")
+    assert(vim.tbl_isempty(require("numb.peek").leftover_floats()), "nothing is left over once the float closed")
+    assert(vim.w[scene.win].numb_peeking == nil, "the target window is not left flagged")
+  end)
+end
+
+function Tests.float_whose_close_failed_leaves_a_later_peek_alone()
+  local numb = configure()
+  local scene = float_scene()
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+  local float = the_float "precondition: the float peek opened a float"
+
+  -- Refused once, then closed by someone else: `with_refused_float_close` closes
+  -- every float it leaves open, with the real `nvim_win_close`.
+  with_refused_float_close(float, 1, function(refused)
+    pcall(peek.cancel, peek)
+    assert(refused() == 1, "precondition: cancel() tried to close the float and the close failed")
+    assert(vim.api.nvim_win_is_valid(float), "precondition: the float is still open")
+  end)
+  assert(not vim.api.nvim_win_is_valid(float), "precondition: someone else closed the float numb failed to close")
+
+  local function assert_later_range(label)
+    local range = highlighted_range(scene.bufnr)
+    assert(
+      range ~= nil and range.count == 1 and range[1] == 18 and range[2] == 22,
+      ("%s: lines 18..22 are highlighted as one range, got %s"):format(label, vim.inspect(range))
+    )
+  end
+
+  local later = numb.peek(0, 20, { style = "window", range = { 18, 22 } })
+  assert(later:is_active(), "precondition: the later window peek is active")
+  assert(vim.w[scene.win].numb_peeking == true, "precondition: the later peek flags its window")
+  assert_later_range "precondition: the later peek draws its range"
+
+  vim.g.numb_api_probe = nil
+  run_cmd ":let g:numb_api_probe = 1\r"
+  drain_scheduled()
+  local probe = vim.g.numb_api_probe
+  vim.g.numb_api_probe = nil
+  assert(probe == 1, "precondition: the command ran, so leaving the command line was exercised")
+
+  assert(later:is_active(), "the later peek is still live")
+  assert(vim.w[scene.win].numb_peeking == true, "the later peek's window keeps its peeking flag")
+  assert_later_range "the later peek keeps its range"
+  assert(
+    cursor_of(scene.win) == 20,
+    ("the window stays on the later peek's line 20, not the ended peek's %d, it is on %d"):format(
+      FLOAT_TARGET,
+      cursor_of(scene.win)
+    )
+  )
+
+  later:cancel()
+  drain_scheduled()
+  assert(cursor_of(scene.win) == scene.cursor, "cancel() puts the window back on its origin")
+  assert(vim.w[scene.win].numb_peeking == nil, "the peeking flag goes when the later peek ends")
+  assert(highlighted_range(scene.bufnr) == nil, "the range goes when the later peek ends")
+end
+
+-- A `float.win_config` that sets only the height, leaving numb's row.
+local function fifteen_rows_high(win_config)
+  win_config.height = 15
+  return win_config
+end
+
+function Tests.float_win_config_setting_only_the_height_keeps_the_frame_inside_the_target()
+  -- On line 3, a 16-row frame on the bottom edge (rows 5..20) leaves the cursor
+  -- line free, so `auto` has a place that neither sticks out nor covers it.
+  for _, case in ipairs { { position = "bottom", cursor = 5 }, { position = "auto", cursor = 3 } } do
+    local numb = configure { float = { position = case.position, win_config = fifteen_rows_high } }
+    with_winborder("", function()
+      local target = float_split_of_height(20)
+      vim.api.nvim_win_set_cursor(target, { case.cursor, 0 })
+      local rows = vim.fn.getwininfo(target)[1].height
+      local peek = numb.peek(target, FLOAT_TARGET, { style = "float" })
+      local float = the_float(("precondition, %s: the float peek opened a float"):format(case.position))
+      assert(
+        vim.api.nvim_win_get_height(float) == 15,
+        ("precondition, %s: the float has the 15 rows win_config set"):format(case.position)
+      )
+
+      for _, step in ipairs { "peek()", "update(300)" } do
+        if step == "update(300)" then
+          assert(peek:update(300) == true, "precondition: update(300) moves the peek")
+        end
+        local frame = frame_of(float)
+        assert(
+          frame.row >= 0 and frame.row + frame.height <= rows,
+          ("%s, after %s: the frame, border included, lies inside the target's %d rows, it is on rows %d..%d"):format(
+            case.position,
+            step,
+            rows,
+            frame.row,
+            frame.row + frame.height - 1
+          )
+        )
+        if case.position == "auto" then
+          local cursor_row = winline_of(target) - 1
+          assert(
+            cursor_row < frame.row or cursor_row >= frame.row + frame.height,
+            ("auto, after %s: the frame on rows %d..%d leaves the cursor line, row %d, uncovered"):format(
+              step,
+              frame.row,
+              frame.row + frame.height - 1,
+              cursor_row
+            )
+          )
+        end
+      end
+      peek:cancel()
+    end)
+    close_other_windows()
+  end
+end
+
+-- Window options outside `LEAKABLE_WINDOW_OPTIONS`: a float opened from the
+-- current window starts with its options, and closing it records them.
+local FOREIGN_WINDOW_OPTIONS = { conceallevel = 2, linebreak = true, cursorlineopt = "number" }
+local TARGET_WINDOW_OPTIONS = { conceallevel = 0, linebreak = false, cursorlineopt = "both" }
+
+-- Set on `win` only, with `scope = nil` setting its global values as well: a
+-- window opened from `win` on a buffer that recorded no options starts from
+-- those. A window's global values of window options are its own, so this
+-- reaches no window but `win` and the ones later split from it.
+local function set_window_options(win, values, scope)
+  for option, value in pairs(values) do
+    vim.api.nvim_set_option_value(option, value, { win = win, scope = scope })
+  end
+end
+
+-- The options of a new window on `bufnr`, opened from the current window: the
+-- new window starts with the current window's options, and entering the buffer
+-- replaces them with whatever the buffer recorded of the last window on it.
+local function foreign_options_a_new_window_opens_with(bufnr)
+  vim.cmd "tabnew"
+  local ok, result = pcall(function()
+    vim.cmd(("buffer %d"):format(bufnr))
+    local values = {}
+    for option in pairs(TARGET_WINDOW_OPTIONS) do
+      values[option] = vim.api.nvim_get_option_value(option, { win = 0 })
+    end
+    return values
+  end)
+  pcall(vim.cmd, "tabclose!")
+  if not ok then
+    error(result, 0)
+  end
+  return result
+end
+
+function Tests.float_api_peek_of_a_window_that_is_not_current_leaves_the_targets_options()
+  local variants = {
+    { label = "the default float" },
+    {
+      label = "a float without minimal style",
+      win_config = function(win_config)
+        win_config.style = nil
+        return win_config
+      end,
+    },
+  }
+  for _, variant in ipairs(variants) do
+    local numb = configure { float = { win_config = variant.win_config } }
+    -- Both scopes: the window left by the previous variant was split from one
+    -- whose global values were foreign, and showing a buffer in the target
+    -- below starts its local values from its global ones.
+    local target = vim.api.nvim_get_current_win()
+    local saved_globals = {}
+    for option in pairs(TARGET_WINDOW_OPTIONS) do
+      saved_globals[option] = vim.api.nvim_get_option_value(option, { win = target, scope = "global" })
+    end
+    with_winborder("", function()
+      set_window_options(target, TARGET_WINDOW_OPTIONS)
+
+      -- The probe sees what a buffer recorded: a window with other options
+      -- closing on a buffer of its own hands them to the next window opened on it.
+      vim.cmd "vnew"
+      local proof = vim.api.nvim_get_current_buf()
+      set_window_options(0, FOREIGN_WINDOW_OPTIONS, "local")
+      vim.cmd "close"
+      vim.api.nvim_set_current_win(target)
+      local recorded = foreign_options_a_new_window_opens_with(proof)
+      vim.api.nvim_buf_delete(proof, { force = true })
+      assert(
+        vim.deep_equal(recorded, FOREIGN_WINDOW_OPTIONS),
+        ("precondition, %s: a new window takes the options its buffer recorded, got %s"):format(
+          variant.label,
+          vim.inspect(recorded, { newline = " ", indent = "" })
+        )
+      )
+
+      -- The current window shows another buffer, with options the target lacks.
+      vim.cmd "vnew"
+      local other = vim.api.nvim_get_current_win()
+      set_window_options(other, FOREIGN_WINDOW_OPTIONS)
+      -- Made from the current window, as `nvim_create_buf` or `:badd` would, and
+      -- only then shown in the target: the buffer records no window showing it
+      -- that a float opened on it could take its options from.
+      local bufnr = vim.api.nvim_create_buf(true, false)
+      local lines = {}
+      for i = 1, TALL_BUFFER_LINES do
+        lines[i] = ("line %03d"):format(i)
+      end
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+      vim.bo[bufnr].modified = false
+      vim.api.nvim_win_set_buf(target, bufnr)
+      assert(vim.api.nvim_get_current_win() == other, "precondition: the current window is not the target")
+      local before = {}
+      for option in pairs(TARGET_WINDOW_OPTIONS) do
+        before[option] = vim.api.nvim_get_option_value(option, { win = target })
+      end
+      assert(
+        vim.deep_equal(before, TARGET_WINDOW_OPTIONS),
+        ("precondition, %s: before the peek the target has its own options, got %s"):format(
+          variant.label,
+          vim.inspect(before, { newline = " ", indent = "" })
+        )
+      )
+
+      local peek = numb.peek(target, 300, { style = "float" })
+      the_float(("precondition, %s: the float peek opened a float"):format(variant.label))
+      assert(vim.api.nvim_get_current_win() == other, "precondition: the peek left the current window current")
+      peek:cancel()
+      assert_no_float(("precondition, %s: cancel() closed the float"):format(variant.label))
+
+      vim.api.nvim_set_current_win(target)
+      local reopened = foreign_options_a_new_window_opens_with(bufnr)
+      assert(
+        vim.deep_equal(reopened, TARGET_WINDOW_OPTIONS),
+        ("%s: after a float peek of a window that was not current, a new window on its buffer has the target's %s, got %s"):format(
+          variant.label,
+          vim.inspect(TARGET_WINDOW_OPTIONS, { newline = " ", indent = "" }),
+          vim.inspect(reopened, { newline = " ", indent = "" })
+        )
+      )
+      vim.api.nvim_buf_delete(bufnr, { force = true })
+    end)
+    close_other_windows()
+    -- `other` survives, split from a window with foreign global values: put
+    -- back what the target started with so the next variant, and the next
+    -- test, start clean.
+    set_window_options(0, saved_globals)
+  end
+end
+
+local OPTIONSET_DURING_FLOAT_TEARDOWN = [[
+vim.opt.runtimepath:append(vim.fn.getcwd())
+local numb = require "numb"
+numb.setup { centered_peeking = false }
+local lines = {}
+for i = 1, 500 do
+  lines[i] = ("line %03d"):format(i)
+end
+vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+vim.api.nvim_win_set_cursor(0, { 5, 0 })
+-- Options a float copies from its target, set away from their defaults.
+vim.wo.list = true
+vim.wo.signcolumn = "yes"
+vim.o.eventignore = "CursorMoved"
+local report = {}
+local fired = {}
+local armed = false
+vim.api.nvim_create_autocmd("OptionSet", {
+  callback = function(event)
+    if armed then
+      table.insert(fired, event.match)
+    end
+  end,
+})
+local function floats()
+  local found = 0
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_config(w).relative ~= "" then
+      found = found + 1
+    end
+  end
+  return found
+end
+-- The counter sees an ordinary option being set.
+armed = true
+vim.wo.spell = true
+armed = false
+report.proof = fired
+fired = {}
+vim.wo.spell = false
+
+local handle = numb.peek(0, 240, { style = "float" })
+report.active = handle:is_active()
+report.floats = floats()
+armed = true
+local ok, cancelled = pcall(handle.cancel, handle)
+armed = false
+report.call_ok = ok
+report.call_error = not ok and tostring(cancelled) or nil
+report.cancelled = ok and cancelled
+report.floats_after = floats()
+report.fired = fired
+report.eventignore = vim.o.eventignore
+io.stdout:write(vim.json.encode(report))
+]]
+
+-- In a child Neovim: OptionSet does not fire in this suite.
+function Tests.float_teardown_fires_no_optionset()
+  local report = run_optionset_child(OPTIONSET_DURING_FLOAT_TEARDOWN)
+
+  assert(
+    vim.deep_equal(report.proof, { "spell" }),
+    ("precondition: the counter hears an ordinary option set, got %s"):format(vim.inspect(report.proof))
+  )
+  assert(report.active and report.floats == 1, "precondition: the float peek opened a float")
+  assert(report.call_ok, ("cancel() must not raise: %s"):format(tostring(report.call_error)))
+  assert(report.cancelled == true, "precondition: cancel() ended the live peek")
+  assert(report.floats_after == 0, ("precondition: cancel() closed the float, %d left"):format(report.floats_after))
+  assert(
+    #report.fired == 0,
+    ("closing a float fires no OptionSet at all, it fired for %s"):format(vim.inspect(report.fired))
+  )
+  assert(
+    report.eventignore == "CursorMoved",
+    ("the user's 'eventignore' is left as it was, got %q"):format(report.eventignore)
+  )
+end
+
+function Tests.float_win_config_returned_table_is_not_changed_by_numb()
+  -- One table, built once and returned every time, as a user holding their
+  -- float configuration in a module would.
+  local shared, snapshot
+  local numb = configure {
+    float = {
+      win_config = function(win_config)
+        if not shared then
+          shared = vim.deepcopy(win_config)
+          shared.border = "single"
+          shared.style = "minimal"
+          shared.noautocmd = true
+          snapshot = vim.deepcopy(shared)
+        end
+        return shared
+      end,
+    },
+  }
+  with_winborder("", function()
+    local target = float_split_of_height(20)
+    local peek = numb.peek(target, FLOAT_TARGET, { style = "float" })
+    local float = the_float "precondition: the float peek opened a float"
+    assert(border_of(float)[4] ~= "", "precondition: the float has the single border win_config returned")
+    assert(peek:update(300) == true, "precondition: update(300) moves the peek")
+    peek:cancel()
+    assert_no_float "precondition: cancel() closed the float"
+
+    for _, key in ipairs { "style", "noautocmd", "border", "height", "row", "width" } do
+      assert(
+        vim.deep_equal(shared[key], snapshot[key]),
+        ("numb leaves the table win_config returned alone: %s was %s, it is %s"):format(
+          key,
+          vim.inspect(snapshot[key]),
+          vim.inspect(shared[key])
+        )
+      )
+    end
+  end)
+  close_other_windows()
+end
+
+function Tests.float_style_switching_from_in_place_lays_the_float_out_against_the_restored_view()
+  local numb = configure()
+  with_winborder("", function()
+    -- Shrunk to 3 rows, too few for a float, with the cursor on its last row.
+    local target = float_split_of_height(20)
+    vim.api.nvim_win_set_cursor(target, { 18, 0 })
+    vim.api.nvim_win_set_height(target, 3)
+    local origin_top, origin_cursor = topline_of(target), cursor_of(target)
+
+    local peek = numb.peek(target, TALL_BUFFER_LINES, { style = "float" })
+    assert_no_float "precondition: a 3-row window peeks in place"
+    assert(cursor_of(target) == TALL_BUFFER_LINES, "precondition: in place, the cursor is on the last line")
+
+    vim.api.nvim_win_set_height(target, 20)
+    local rows = vim.fn.getwininfo(target)[1].height
+    local frame_rows = math.floor(rows * 0.4) + 1
+    local scrolled_row = winline_of(target)
+    assert(
+      scrolled_row > rows - frame_rows,
+      ("precondition: in the view the in-place peek scrolled, the cursor is on row %d, under a bottom float"):format(
+        scrolled_row
+      )
+    )
+
+    assert(peek:update(300) == true, "update() returns true")
+
+    local float = the_float "once the window is big enough, the float style floats"
+    assert(
+      topline_of(target) == origin_top and cursor_of(target) == origin_cursor,
+      ("the target window is back on topline %d, cursor %d, it is on %d, %d"):format(
+        origin_top,
+        origin_cursor,
+        topline_of(target),
+        cursor_of(target)
+      )
+    )
+    local restored_row = winline_of(target)
+    assert(
+      restored_row <= rows - frame_rows,
+      ("precondition: in the restored view the cursor is on row %d, clear of a bottom float"):format(restored_row)
+    )
+    local edge = edge_of(float, target)
+    assert(
+      edge == "bottom",
+      ("the float is laid out against the restored view, which leaves the bottom free, it is at %s"):format(edge)
+    )
+    peek:cancel()
+    assert_no_float "nothing floats after cancel()"
+  end)
+  close_other_windows()
+end
+
+function Tests.float_update_after_the_target_switched_buffer_describes_the_floats_own_buffer()
+  local numb = configure()
+  with_winborder("", function()
+    local scene = float_scene()
+    local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+    local float = the_float "precondition: the float peek opened a float"
+
+    local short = vim.api.nvim_create_buf(false, true)
+    local short_lines = {}
+    for i = 1, 50 do
+      short_lines[i] = ("short %02d"):format(i)
+    end
+    vim.api.nvim_buf_set_lines(short, 0, -1, false, short_lines)
+    vim.api.nvim_win_set_buf(scene.win, short)
+    assert(peek:is_active(), "precondition: the peek outlives its target switching buffer")
+
+    assert(peek:update(300) == true, "precondition: update(300) moves the peek")
+
+    assert(vim.api.nvim_win_get_buf(float) == scene.bufnr, "the float still shows its own buffer")
+    assert(cursor_of(float) == 300, ("the float shows line 300, it is on %d"):format(cursor_of(float)))
+    local expected = (" 300/%d "):format(TALL_BUFFER_LINES)
+    assert(
+      title_of(float) == expected,
+      ("the title counts the float's own buffer, %q, got %q"):format(expected, title_of(float))
+    )
+    peek:cancel()
+    assert_no_float "nothing floats after cancel()"
+  end)
+end
+
+-------------------------------------------------------------------------------
 -- CONFIG VALIDATION TESTS
 -------------------------------------------------------------------------------
 
@@ -2847,6 +5364,12 @@ local function capture_notifications(fn)
     error(err)
   end
   return messages
+end
+
+-- A `float.win_config` value for the rows below. Kept by reference, which is
+-- what `vim.deep_equal` compares functions by.
+local function keep_win_config(win_config)
+  return win_config
 end
 
 -- What `numb.config` does with each shape of input, as a table. These need no
@@ -2890,6 +5413,69 @@ local SANITIZE_CASES = {
   { label = "a list of numbers", input = { disable_for_buftype = { 1, 2 } }, kept = {}, warnings = 1 },
   { label = "a keyed table", input = { disable_for_buftype = { terminal = true } }, kept = {}, warnings = 1 },
   { label = "a string where a list belongs", input = { disable_for_buftype = "terminal" }, kept = {}, warnings = 1 },
+  -- `peek_style` is a string, but only three strings are an option.
+  { label = "the float peek style", input = { peek_style = "float" }, kept = { peek_style = "float" }, warnings = 0 },
+  { label = "the auto peek style", input = { peek_style = "auto" }, kept = { peek_style = "auto" }, warnings = 0 },
+  { label = "a misspelled peek style", input = { peek_style = "flaot" }, kept = {}, warnings = 1 },
+  { label = "a peek style that is not a string", input = { peek_style = true }, kept = {}, warnings = 1 },
+  -- `float` is a table of its own options. Each bad subkey falls back alone, so
+  -- every row with one carries a good one that must survive it.
+  {
+    label = "a float table",
+    input = { float = { height = 0.5, position = "top", win_config = keep_win_config } },
+    kept = { float = { height = 0.5, position = "top", win_config = keep_win_config } },
+    warnings = 0,
+  },
+  {
+    label = "a float height in rows",
+    input = { float = { height = 6 } },
+    kept = { float = { height = 6 } },
+    warnings = 0,
+  },
+  { label = "float given as a list", input = { float = { 0.4, "top" } }, kept = {}, warnings = 1 },
+  { label = "float given as a string", input = { float = "top" }, kept = {}, warnings = 1 },
+  {
+    label = "an unknown float option",
+    input = { float = { foo = 1, height = 6 } },
+    kept = { float = { height = 6 } },
+    warnings = 1,
+  },
+  {
+    label = "a float height of 0",
+    input = { float = { height = 0, position = "top" } },
+    kept = { float = { position = "top" } },
+    warnings = 1,
+  },
+  {
+    label = "a negative float height",
+    input = { float = { height = -1, position = "top" } },
+    kept = { float = { position = "top" } },
+    warnings = 1,
+  },
+  {
+    label = "a float height that is neither a fraction nor whole rows",
+    input = { float = { height = 1.5, position = "top" } },
+    kept = { float = { position = "top" } },
+    warnings = 1,
+  },
+  {
+    label = "a float height that is not a number",
+    input = { float = { height = "half", position = "top" } },
+    kept = { float = { position = "top" } },
+    warnings = 1,
+  },
+  {
+    label = "an unknown float position",
+    input = { float = { position = "left", height = 6 } },
+    kept = { float = { height = 6 } },
+    warnings = 1,
+  },
+  {
+    label = "a float win_config that is not a function",
+    input = { float = { win_config = { border = "single" }, height = 6 } },
+    kept = { float = { height = 6 } },
+    warnings = 1,
+  },
 }
 
 function Tests.config_sanitize_states_every_rule()
@@ -2919,6 +5505,50 @@ function Tests.config_resolve_never_writes_through_to_the_defaults()
   resolved.show_cursorline = false
   assert(vim.deep_equal(config.DEFAULTS, before), "resolve() must not write through to the defaults")
   assert(config.resolve(nil).show_cursorline == true, "a later resolve must still see the real default")
+end
+
+function Tests.config_defaults_peek_in_the_window_with_a_float_ready()
+  local resolved = require("numb.config").resolve(nil)
+  assert(
+    resolved.peek_style == "window",
+    ("peek_style defaults to window, got %s"):format(vim.inspect(resolved.peek_style))
+  )
+  assert(
+    type(resolved.float) == "table"
+      and resolved.float.height == 0.4
+      and resolved.float.position == "auto"
+      and resolved.float.win_config == nil,
+    ("float defaults to { height = 0.4, position = 'auto' }, got %s"):format(vim.inspect(resolved.float))
+  )
+end
+
+function Tests.config_resolve_merges_float_options_over_their_defaults()
+  local config = require "numb.config"
+  local before = vim.deepcopy(config.DEFAULTS)
+  local resolved = config.resolve { float = { height = 5 } }
+  assert(resolved.float.height == 5, ("the given height is used, got %s"):format(vim.inspect(resolved.float)))
+  assert(
+    resolved.float.position == "auto",
+    ("a float option left out keeps its default, got %s"):format(vim.inspect(resolved.float))
+  )
+  resolved.float.position = "top"
+  assert(vim.deep_equal(config.DEFAULTS, before), "resolve() must not share the float table with the defaults")
+  assert(config.resolve(nil).float.position == "auto", "a later resolve still sees the default position")
+end
+
+function Tests.config_bad_float_option_falls_back_alone_and_is_named()
+  local config = require "numb.config"
+  local resolved
+  local messages = capture_notifications(function()
+    resolved = config.resolve { float = { height = 0, position = "top", foo = true } }
+  end)
+  assert(#messages == 2, ("a bad height and an unknown key warn once each, got %s"):format(vim.inspect(messages)))
+  local joined = table.concat({ messages[1].msg, messages[2].msg }, "\n")
+  assert(joined:find("float.height", 1, true) ~= nil, ("the warning names float.height, got %q"):format(joined))
+  assert(joined:find("float.foo", 1, true) ~= nil, ("the warning names float.foo, got %q"):format(joined))
+  assert(resolved.float.height == 0.4, ("the bad height falls back to 0.4, got %s"):format(vim.inspect(resolved.float)))
+  assert(resolved.float.position == "top", "the good position next to it is kept")
+  assert(resolved.float.foo == nil, "the unknown key is dropped")
 end
 
 function Tests.config_unknown_option_warns_and_is_dropped()
@@ -3452,6 +6082,42 @@ function Tests.health_does_not_depend_on_internal_state_for_the_config()
     health_matches(records, "info", "number_only = true") ~= nil,
     "the config report must come from the public getter, not from numb._state"
   )
+end
+
+function Tests.health_warns_about_a_float_left_open_by_an_ended_peek()
+  local numb = configure()
+  float_scene()
+  local peek = numb.peek(0, FLOAT_TARGET, { style = "float" })
+  local float = the_float "precondition: the float peek opened a float"
+  local id = tostring(float)
+  local function reported(records)
+    for _, entry in ipairs(health_entries(records, "warn")) do
+      if entry.msg:find "[Ff]loat" and entry.msg:find(id, 1, true) then
+        return entry
+      end
+    end
+    return nil
+  end
+  assert(reported(capture_health()) == nil, "precondition: the float of the live peek is not reported")
+
+  local ok, err = pcall(function()
+    -- The peek is no longer live but its float is still registered and open,
+    -- as when a teardown is cut short.
+    numb._state.active = nil
+    assert(vim.api.nvim_win_is_valid(float), "precondition: the float is still open")
+    local records = capture_health()
+    assert(
+      reported(records) ~= nil,
+      ("health warns about float %s left open, got %s"):format(id, vim.inspect(health_entries(records, "warn")))
+    )
+  end)
+  numb.disable()
+  close_floats()
+  numb.enable()
+  if not ok then
+    error(err, 0)
+  end
+  assert(not peek:is_active(), "the ended peek stays inactive")
 end
 
 -------------------------------------------------------------------------------

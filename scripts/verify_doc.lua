@@ -59,6 +59,13 @@ local required = {
 for option in pairs(numb.get_config()) do
   table.insert(required, "numb-" .. option)
 end
+-- The keys of `float` have tags of their own. `win_config` has no default, so
+-- it is named here rather than found among the defaults.
+local float_keys = vim.tbl_keys(require("numb.config").DEFAULTS.float)
+table.insert(float_keys, "win_config")
+for _, key in ipairs(float_keys) do
+  table.insert(required, "numb-float." .. key)
+end
 for name, value in pairs(numb) do
   if type(value) == "function" and not name:match "^_" then
     table.insert(required, ("numb.%s()"):format(name))
@@ -106,18 +113,34 @@ for _, line in ipairs(vim.fn.readfile(DOC)) do
   end
 end
 
--- Rendered the way the help file writes them, so an empty list reads as `{}`
--- rather than as a table address.
+-- Rendered the way the help file writes them: strings quoted, an empty list as
+-- `{}` rather than a table address, a list as `{ "a", "b" }`, and a keyed table
+-- on one line with its keys sorted, as `{ height = 0.4, position = "auto" }`.
+-- A value with no literal form, such as a function, has no place in the block,
+-- so a key holding one is left out of the rendering.
 local function render_default(value)
+  if type(value) == "string" then
+    return ('"%s"'):format(value)
+  end
   if type(value) ~= "table" then
     return tostring(value)
   end
-  if #value == 0 then
+  if next(value) == nil then
     return "{}"
   end
   local items = {}
-  for index, item in ipairs(value) do
-    items[index] = ('"%s"'):format(item)
+  if vim.islist(value) then
+    for index, item in ipairs(value) do
+      items[index] = render_default(item)
+    end
+  else
+    local keys = vim.tbl_keys(value)
+    table.sort(keys)
+    for _, key in ipairs(keys) do
+      if type(value[key]) ~= "function" then
+        table.insert(items, ("%s = %s"):format(key, render_default(value[key])))
+      end
+    end
   end
   return "{ " .. table.concat(items, ", ") .. " }"
 end

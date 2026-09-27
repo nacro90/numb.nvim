@@ -381,12 +381,13 @@ end
 ---its own, and a caller here asked explicitly.
 ---@param winnr integer Window handle, `0` for the current window
 ---@param line integer Line to peek, clamped to the buffer
----@param opts? { range?: integer[] } `range = { first, last }` highlights those
----lines as well
+---@param opts? { range?: integer[], style?: "window"|"float"|"auto" } `range =
+---{ first, last }` highlights those lines as well; `style` draws this peek with
+---another `peek_style` than the configured one
 ---@return NumbPeek
 function numb.peek(winnr, line, opts)
   peek.expect_integer(winnr, "winnr", 2)
-  local range = peek.validate_target(line, opts)
+  local range, style = peek.validate_target(line, opts)
   if winnr == 0 then
     winnr = api.nvim_get_current_win()
   end
@@ -395,12 +396,12 @@ function numb.peek(winnr, line, opts)
   end
 
   if not numb.is_enabled() then
-    return peek.inactive(winnr)
+    return peek.inactive(winnr, style)
   end
 
   -- Drawn by the redraw hook when called from command line mode, as from a
   -- `<Cmd>` mapping there; every other mode draws by itself.
-  return peek.open(winnr, line, range)
+  return peek.open(winnr, line, range, style)
 end
 
 -- Internals the test suite drives directly; not part of the public API. These
