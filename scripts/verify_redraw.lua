@@ -305,6 +305,55 @@ local function shows(line)
   end
 end
 
+---For rows a float draws, where the line sits inside other characters: a
+---number column, the float's padding, or its border.
+---@param text string
+local function contains(text)
+  return function(frame)
+    return vim.iter(frame.lines):any(function(row)
+      return row:find(text, 1, true) ~= nil
+    end)
+  end
+end
+
+---A float's border row, or its `N/100` title. Nothing else on screen draws
+---either: the buffer is only `text line NNN` rows.
+local function has_float_border(frame)
+  return vim.iter(frame.lines):any(function(row)
+    return row:find("─", 1, true) ~= nil or row:find("/100", 1, true) ~= nil
+  end)
+end
+
+---The rows of the window above a bottom strip show it as it was before the
+---peek: line 1 on the first row, and no number column.
+local function base_rows_untouched(frame)
+  return frame.lines[1] == "text line 001" and frame.lines[2] == "text line 002"
+end
+
+---Reconfigure the child after SETUP, which ran `setup()` with the defaults.
+---@param options string A Lua table constructor
+local function configure(child, options)
+  child.request("nvim_exec_lua", { ("require('numb').setup(%s)"):format(options), {} })
+end
+
+---Counts the keystrokes during which a float was open, so a scenario that must
+---not draw a float can also show that there was one to hide. Installed after
+---`configure`, whose `setup()` reinstalls numb's own handler, so this one runs
+---after it.
+local COUNT_FLOATS = [==[
+  vim.g.float_peeks = 0
+  vim.api.nvim_create_autocmd("CmdlineChanged", {
+    callback = function()
+      for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_get_config(win).relative ~= "" then
+          vim.g.float_peeks = vim.g.float_peeks + 1
+          return
+        end
+      end
+    end,
+  })
+]==]
+
 local scenarios = {
   {
     name = "a count before a mapping that clears the range",
@@ -394,6 +443,55 @@ local scenarios = {
       -- peek, drawn, and an empty step would leave line 80 on screen.
       every_frame("cancel() from command line mode brings the original view back", { frames[#frames] }, function(frame)
         return frame.lines[1] == "text line 001" and lacks_number_column(frame)
+      end)
+      child.type "<Esc>"
+    end,
+  },
+  {
+    name = "a float peek leaves the window behind it alone",
+    run = function(child)
+      configure(child, "{ peek_style = 'float' }")
+      child.type ":"
+      local frames = child.type "80"
+      every_frame(":80 shows line 80 in a float", frames, contains "text line 080")
+      every_frame(":80 draws the float's border", frames, has_float_border)
+      every_frame(":80 leaves the rows behind the float alone", frames, base_rows_untouched)
+      local closed = child.type "<Esc>"
+      every_frame("Esc closes the float", { closed[#closed] }, function(frame)
+        return not has_float_border(frame) and base_rows_untouched(frame) and lacks_number_column(frame)
+      end)
+    end,
+  },
+  {
+    name = "a mapping that jumps with a float peek",
+    run = function(child)
+      configure(child, "{ peek_style = 'float' }")
+      child.request("nvim_exec_lua", { COUNT_FLOATS, {} })
+      local frames = child.type "J"
+      no_frame("J never shows the floats of :3 and :30", frames, has_float_border)
+      no_frame("J never shows a number column", frames, has_number_column)
+      local floats = child.request("nvim_get_var", { "float_peeks" })
+      if floats == 0 then
+        table.insert(failures, "J with a float peek: no float was opened, so hiding it proves nothing")
+      end
+      local line = child.request("nvim_eval", { "line('.')" })
+      if line ~= 30 then
+        table.insert(failures, ("J with a float peek: landed on line %s, expected 30"):format(tostring(line)))
+      end
+    end,
+  },
+  {
+    name = "auto previews an on-screen line in place",
+    run = function(child)
+      configure(child, "{ peek_style = 'auto' }")
+      child.type ":"
+      local frames = child.type "5"
+      every_frame(":5 with auto previews line 5 in place", frames, shows "5 text line 005")
+      no_frame(":5 with auto opens no float", frames, has_float_border)
+      -- Without this, a setup that ignored `auto` would pass the two checks above.
+      local far = child.type "<BS>80"
+      every_frame(":80 with auto shows line 80 in a float", far, function(frame)
+        return contains "text line 080"(frame) and has_float_border(frame) and base_rows_untouched(frame)
       end)
       child.type "<Esc>"
     end,

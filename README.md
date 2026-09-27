@@ -139,6 +139,8 @@ Every option may be omitted; the rest keep their defaults.
 | `range_peek` | `true` | Highlight the whole range while typing `:N,M{cmd}` |
 | `disable_for_buftype` | `{}` | `buftype` values to leave alone, for example `{ 'terminal' }` |
 | `disable_for_filetype` | `{}` | `filetype` values to leave alone, for example `{ 'fugitive' }` |
+| `peek_style` | `"window"` | Where a peek is drawn: `"window"` in the window itself, `"float"` in a float over it that leaves the window untouched, `"auto"` in place when the target is on screen and in a float when it is not |
+| `float` | `{ height = 0.4, position = "auto" }` | How a float peek looks: `height` as a fraction of the window or a number of rows, `position` as `"bottom"`, `"top"` or `"auto"`, and an optional `win_config` function; see [Float peek](#float-peek) |
 
 ```lua
 require('numb').setup {
@@ -150,6 +152,8 @@ require('numb').setup {
   range_peek = true,
   disable_for_buftype = {},
   disable_for_filetype = {},
+  peek_style = "window",
+  float = { height = 0.4, position = "auto" },
 }
 ```
 
@@ -202,6 +206,50 @@ A highlight belongs to a buffer rather than a window, so the range shows up in
 every split displaying that buffer. The cursor, the window options and
 `vim.w.numb_peeking` stay per window.
 
+### Float peek
+
+With `peek_style = "float"` the target is shown in a float over the window
+instead of in the window itself. The window keeps its cursor, its scroll
+position and its options, so where you were stays in sight while you look
+elsewhere. The float closes when the peek ends, and `<CR>` lands on the target
+as usual, jumplist entry included. `"auto"` peeks in place when the target is
+already on screen and in a float when it is not, deciding again on every
+keystroke:
+
+```lua
+require('numb').setup {
+  peek_style = 'auto',
+}
+```
+
+The float takes up `float.height` of the window (a fraction below 1, a number
+of rows from 1 up, never fewer than 3) on the edge `float.position` names;
+`"auto"` is the bottom unless that would cover the cursor line. By default it
+draws only a top edge titled with the line and the buffer's length, and it
+respects `winborder` on Neovim 0.11 and later. `float.win_config` gets the
+configuration numb computed for `nvim_open_win` and returns the one to use, so
+it has the last word:
+
+```lua
+require('numb').setup {
+  peek_style = 'float',
+  float = {
+    height = 12,
+    win_config = function(config)
+      config.border = 'rounded'
+      config.title_pos = 'center'
+      return config
+    end,
+  },
+}
+```
+
+The float uses `NormalFloat`, `FloatBorder` and `FloatTitle`, never takes focus,
+and opens and moves without window autocommands. A window too small for a
+float peeks in place instead. `vim.w.numb_peeking` and the `win` of the peek
+events still name the window being peeked; `User NumbPeek` also carries the
+float as `float_win`. See `:h numb-float` for the details.
+
 ### Statusline integration
 
 While a peek is active, numb.nvim sets `vim.w.numb_peeking = true` in that
@@ -227,7 +275,9 @@ Other plugins can use the same preview.
 `require('numb').peek(winnr, line, opts?)` previews a line in any window, `0`
 being the current one, and returns a handle with `update(line, opts?)`,
 `accept()`, `cancel()` and `is_active()`. Pass
-`opts.range = { first, last }` to highlight a range as well. `accept()` jumps
+`opts.range = { first, last }` to highlight a range as well, and
+`opts.style` to draw that peek with another `peek_style` than the configured
+one. `accept()` jumps
 right away and pushes the jumplist entry, so `<C-o>` returns; `cancel()` puts
 the window back as it was. A picker previewing its selection looks like this:
 
