@@ -29,6 +29,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NumbUnpeek`. Command line peeks fire them too, so a statusline or another
   plugin can follow any preview without polling. For a confirmed command line
   `NumbUnpeek` fires once the command has run and the cursor has landed.
+- Float peek. `peek_style = "float"` shows the target in a float over the
+  window instead of scrolling the window to it, so the cursor, the scroll
+  position and the window options stay exactly where they were while you look
+  elsewhere; confirming still lands on the target, jumplist entry included.
+  `peek_style = "auto"` peeks in place when the target is already on screen and
+  in a float when it is not, deciding again on every keystroke. The default
+  stays `"window"`. The new `float` option sets the height (a fraction of the
+  window or a number of rows, at least 3), the edge it sits on (`"bottom"`,
+  `"top"`, or `"auto"`, which avoids covering the cursor line) and an optional
+  `win_config` function that has the last word on the `nvim_open_win`
+  configuration. The border follows `win_config`, then `'winborder'` on
+  Neovim 0.11 and later, then a top edge titled with the line and the buffer's
+  length. The float never takes focus, and opens and moves without window
+  autocommands. A window too small for a float, border included, peeks in
+  place instead. Closing the float leaves no trace in the buffer: a new window
+  on it opens where the peeked window's cursor is, with that window's options.
+  `numb.peek()` takes `opts.style` to pick the style for one peek, the
+  `NumbPeek` event data carries the float as `float_win`, and
+  `:checkhealth numb` reports a float left open by a peek that already ended.
+  See `:h numb-float`.
 
 ### Fixed
 - A confirmed command that switches the window to another buffer, such as

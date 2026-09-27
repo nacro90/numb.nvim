@@ -124,8 +124,10 @@ functions in |numb-api|.
 ==============================================================================
 6. Options                                                      *numb-options*
 
-Options are passed as a table to |numb.setup()| or |numb.enable()|. Every
-option is a boolean. Any subset may be given; the rest keep their defaults.
+Options are passed as a table to |numb.setup()| or |numb.enable()|. Most
+options are booleans; the exceptions are two lists of strings, the string
+|numb-peek_style| and the table |numb-float|. Any subset may be given; the
+rest keep their defaults, and inside `float` the same holds for each key.
 
 Unknown option names, and values of the wrong type, are reported through
 |vim.notify()| and ignored. Invalid configuration never raises: the offending
@@ -142,8 +144,12 @@ Defaults: >lua
       range_peek = true,
       disable_for_buftype = {},
       disable_for_filetype = {},
+      peek_style = "window",
+      float = { height = 0.4, position = "auto" },
     }
 <
+`float.win_config` has no default and is left out above; see |numb-float|.
+
 ------------------------------------------------------------------------------
 show_numbers                                               *numb-show_numbers*
                 Type: `boolean`, default: `true`
@@ -253,6 +259,147 @@ disable_for_filetype                               *numb-disable_for_filetype*
 <
                 Checked after |numb-disable_for_buftype|, and the same trade
                 applies: the jump still happens, only the preview goes away.
+
+------------------------------------------------------------------------------
+peek_style                                                   *numb-peek_style*
+                Type: `string`, default: `"window"`
+
+                Where a peek is drawn. One of:
+
+                `"window"`  In the window itself, as described in
+                          |numb-intro|: the view scrolls to the target and
+                          the window options are changed until the peek
+                          ends.
+                `"float"`   In a float over the window, showing the same
+                          buffer with the target centered in it. The window
+                          behind it is left untouched: its cursor, its
+                          scroll position and its options do not change, so
+                          where you were stays in sight. The float closes
+                          when the peek ends, and confirming lands on the
+                          target in the window, with the jumplist entry and
+                          centering as usual. See |numb-float|.
+                `"auto"`    In place when the target is already on screen,
+                          in a float when it is not. Decided again on every
+                          keystroke of the command line and on every
+                          |NumbPeek:update()|, always against the window as
+                          you left it, so typing `:2`, `:24`, `:240` can go
+                          from in place to a float within one peek.
+
+                |numb-show_numbers|, |numb-show_cursorline| and
+                |numb-hide_relativenumbers| apply to the float instead of the
+                window. |w:numb_peeking| and |numb.is_peeking()| still
+                report the window being peeked, not the float.
+
+                Any other value is reported and ignored, as for every
+                option. |numb.peek()| can override the style for one peek
+                through {opts.style}.
+
+------------------------------------------------------------------------------
+float                                                             *numb-float*
+                Type: `table`, default: `{ height = 0.4, position = "auto" }`
+
+                How a float peek looks, for |numb-peek_style| `"float"` and
+                `"auto"`. Keys left out keep their defaults, so
+                `float = { height = 5 }` changes only the height. An unknown
+                key or a bad value is reported and falls back alone.
+                `win_config` has no default, which is why the Defaults block
+                leaves it out.
+
+                The float never takes focus, and opens and moves without
+                window or buffer autocommands (|WinNew|, |WinEnter|,
+                |BufEnter|, ...), so statusline and window decorating
+                plugins do not run on every keystroke. Closing it does fire
+                |WinClosed|. A window-local 'winbar' would be copied onto it
+                and take a row, so the float clears its own. It uses the
+                standard groups |hl-NormalFloat|, |hl-FloatBorder| and
+                |hl-FloatTitle|.
+
+                The float is laid out against the window when it opens and
+                on every move. A live float is not laid out again when the
+                window is resized (|VimResized|, |WinResized|) until its next
+                |NumbPeek:update()|, which for the command line is the next
+                keystroke. The layout is made for the border the float will
+                actually have, the one `win_config` returned included, so a
+                wider or taller border still keeps the frame inside the
+                window. A `row`, `width` or `height` that `win_config` set
+                itself is left as it returned it; when it set the `height`
+                but left the `row`, the row is placed again for that height,
+                so the frame still ends inside the window.
+
+                A window too small for a float, fewer rows of text than 3
+                plus that border, peeks in place instead, as `"window"` does,
+                whether the style is `"float"` or `"auto"`, rather than
+                covering the window below it.
+
+                Neovim records the cursor and the options of a window that
+                closes on a buffer, and a new window on the buffer starts
+                from them. So the float is opened from the target window,
+                whichever window is current, and starts with the target's
+                options. Before it closes, its cursor is moved to the target
+                window's cursor, line and column, and the target's
+                window-local options that a float peek changes ('number',
+                'cursorline', 'foldenable', 'signcolumn', 'list', 'winbar'
+                and the like) are copied onto it under |:noautocmd|, so no
+                |OptionSet| fires: a new window on the buffer opens where the
+                target window is, with the target's options, not the
+                float's.
+
+                                                           *numb-float.height*
+                `height` (`number`, default `0.4`)
+                    Below 1, a fraction of the window's height; from 1 up, a
+                    whole number of rows. Counts the rows of text, not the
+                    border, and is never less than 3, so the target always
+                    has a line of context either side of it. Otherwise it is
+                    no taller than the window's text, border included; a
+                    window too small for 3 rows peeks in place.
+
+                                                         *numb-float.position*
+                `position` (`string`, default `"auto"`)
+                    Which edge of the window the float sits on: `"bottom"`,
+                    `"top"`, or `"auto"`, which is the bottom unless the
+                    float would cover the cursor line there, and the top
+                    then.
+
+                                                       *numb-float.win_config*
+                `win_config` (`function`, default none)
+                    Called with the configuration numb computed for
+                    |nvim_open_win()| whenever the float is laid out, which
+                    is at least once each time it is opened or moved, and
+                    returns the one to use; returning `nil` keeps the
+                    computed one, and returning anything else but a table
+                    raises an error naming `float.win_config`. numb works on
+                    a copy of the table returned, so the function may keep
+                    and return the same table every time. What it sets wins
+                    over the border and title rules below; numb fits the
+                    `height`, `row` and `width` to the final border only
+                    where `win_config` left numb's own values.
+
+                The border is, in order of precedence: whatever `win_config`
+                returns, then 'winborder' when it is set (Neovim 0.11 and
+                later), then a default that draws only a top edge. The top
+                edge carries the title ` N/total `, the target line and the
+                line count of the buffer the float shows. A border with no
+                top edge has nowhere to put a title, so the float then has
+                none.
+
+                A rounded, slightly transparent float: >lua
+                    require('numb').setup {
+                      peek_style = "auto",
+                      float = {
+                        win_config = function(config)
+                          config.border = "rounded"
+                          return config
+                        end,
+                      },
+                    }
+                    vim.api.nvim_create_autocmd('User', {
+                      pattern = 'NumbPeek',
+                      callback = function(args)
+                        local float = args.data.float_win
+                        if float then vim.wo[float].winblend = 10 end
+                      end,
+                    })
+<
 
 ==============================================================================
 7. Lua API                                                          *numb-api*
@@ -381,13 +528,19 @@ numb.peek({winnr}, {line}, {opts})
                     • {range} (`integer[]?`) A `{ first, last }` pair of line
                       numbers to highlight with |NumbRange| as well. Both
                       ends are clamped, and reversed bounds are accepted.
+                    • {style} (`string?`) `"window"`, `"float"` or `"auto"`:
+                      draw this peek with that |numb-peek_style| instead of
+                      the configured one. The handle keeps it for every
+                      |NumbPeek:update()|, and with `"auto"` each update
+                      decides again between in place and a float.
 
                 Return: ~
                     (`NumbPeek`) The handle, with the methods below.
 
                 Raises an error, through |error()|, when an argument has the
                 wrong type, {winnr}, {line} or an end of {opts.range} is not
-                an integer (`10.5`, NaN and `math.huge` are rejected), or
+                an integer (`10.5`, NaN and `math.huge` are rejected),
+                {opts.style} is anything but one of the three styles, or
                 {winnr} is not a valid window. These are programming
                 mistakes, so they are not reported quietly, and nothing is
                 peeked.
@@ -398,22 +551,29 @@ numb.peek({winnr}, {line}, {opts})
 
                                                            *NumbPeek:update()*
 NumbPeek:update({line}, {opts})
-                Move the preview to another line, in the same window. The
-                window is restored first and peeked again, so what the
-                final restore puts back is always the state from before the
-                first peek. {opts.range} replaces the highlighted range, and
-                leaving it out clears the range. Fires `User NumbPeek`.
+                Move the preview to another line, in the same window. In
+                place, the window is restored first and peeked again, so
+                what the final restore puts back is always the state from
+                before the first peek; a float is moved and retitled
+                instead, and the window behind it stays untouched.
+                {opts.range} replaces the highlighted range, and leaving it
+                out clears the range. Fires `User NumbPeek`.
 
                 Parameters: ~
                   • {line} (`integer`) Line to preview, clamped as in
                     |numb.peek()|.
-                  • {opts} (`table?`) As in |numb.peek()|.
+                  • {opts} (`table?`) As in |numb.peek()|, except {style}:
+                    a handle keeps the style it was opened with, so
+                    passing one raises an error.
 
                 Return: ~
                     (`boolean`) `true` when the preview moved, `false` when
-                    the handle is inactive, in which case nothing happens.
-                    Bad arguments raise an error either way, before anything
-                    changes, so the previous preview stays up.
+                    the handle is inactive, in which case nothing happens,
+                    or when it was ended during the move, for instance by
+                    an autocommand calling |numb.disable()| or closing the
+                    float. Bad arguments
+                    raise an error either way, before anything changes, so
+                    the previous preview stays up.
 
                                                            *NumbPeek:accept()*
 NumbPeek:accept()
@@ -459,9 +619,9 @@ NumbPeek:is_active()
                     (`boolean`) `true` while the handle is live.
 
                                                              *NumbPeek-events*
-Every peek fires two |User| autocommands, whether it was opened through
-|numb.peek()| or by typing on the command line. The details are in the
-event's `data` field (see |nvim_create_autocmd()|).
+Every peek that becomes live fires two |User| autocommands, whether it was
+opened through |numb.peek()| or by typing on the command line. The details
+are in the event's `data` field (see |nvim_create_autocmd()|).
 
   `User NumbPeek`    When a peek opens and on every update, after the
                      window shows the new line. Typing `:120` fires it once
@@ -492,9 +652,14 @@ event's `data` field (see |nvim_create_autocmd()|).
                      the new peek starts from where the first one landed.
 
 `data` fields: ~
-  • {win} (`integer`) Window handle of the peeked window: the one whose
-    buffer is previewed and where accepting lands. |numb.is_peeking()| and
-    |w:numb_peeking| describe the same window.
+  • {win} (`integer`) Window handle of the target window: the one whose
+    buffer is previewed and where accepting lands, whether the peek is drawn
+    in it or in a float over it. |numb.is_peeking()| and |w:numb_peeking|
+    describe the same window.
+  • {float_win} (`integer?`) `NumbPeek` only: the float showing the peek
+    while one is shown (see |numb-peek_style|), for a listener that
+    decorates it, and `nil` for a peek drawn in the window. `NumbUnpeek`
+    never carries it, since the float is closed by then.
   • {line} (`integer`) The previewed line, after clamping.
   • {range} (`integer[]?`) The highlighted range as `{ low, high }`, or `nil`
     when there is none.
@@ -573,8 +738,9 @@ you think it is. It covers:
   - whether the `numb` augroup still owns its |CmdlineChanged| and
     |CmdlineLeave| autocommands, which another `augroup numb` in your config
     can clear;
-  - which windows are peeking at the moment, and any saved state left behind
-    by a window that was closed mid-peek;
+  - which windows are peeking at the moment, any saved state left behind
+    by a window that was closed mid-peek, and any float a float peek left
+    open after it ended;
   - the active configuration, so that a pasted health report is
     self-contained.
 

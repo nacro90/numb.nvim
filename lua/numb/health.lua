@@ -120,6 +120,24 @@ local function check_status(numb)
   end
 end
 
+---Report floats a float peek left open after it ended. Quiet when there are
+---none, and when the loaded numb.nvim predates float peeks.
+local function check_leftover_floats()
+  local loaded, peek = pcall(require, "numb.peek")
+  if not loaded or type(peek) ~= "table" or type(peek.leftover_floats) ~= "function" then
+    return
+  end
+  local leftovers = vim.tbl_map(tostring, peek.leftover_floats())
+  if #leftovers > 0 then
+    local message = ("Float(s) left open by a peek that already ended: %s"):format(table.concat(leftovers, ", "))
+    vim.health.warn(message, {
+      "A float peek closes its float when it ends, so one surviving here means",
+      "that teardown was interrupted, for example by an error in an autocommand.",
+      "`:Numb disable` followed by `:Numb enable` closes it.",
+    })
+  end
+end
+
 ---Report live peeking state. Both branches stay quiet when there is nothing to
 ---say, so a healthy session does not gain noise here.
 ---@param numb table The loaded `numb` module
@@ -134,6 +152,8 @@ local function check_peek_state(numb, state)
   if #peeking > 0 then
     vim.health.info("Peeking right now in window(s): " .. table.concat(peeking, ", "))
   end
+
+  check_leftover_floats()
 
   if type(state) ~= "table" or type(state.win_states) ~= "table" then
     return
