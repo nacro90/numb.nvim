@@ -37,6 +37,15 @@ this is the record of what each item turned out to be.
 
 ## Future / Under Consideration
 
+- **`border` and `title` options for the float.** Today they come from
+  `float.win_config` or `'winborder'`. Adding them later is backwards
+  compatible, so they wait for a request.
+- **Split the float geometry into `lua/numb/float.lua`.** The border and layout
+  helpers are close to pure; moving them next to `address.lua` and
+  `config.lua` would let a table of cases test them directly.
+- **Check the float against command line UIs.** Not yet verified: the float's
+  zindex next to noice-style command line popups with `position = "top"`.
+
 Items below are not committed to any release. They may be promoted,
 deferred, or dropped after discussion.
 
@@ -68,6 +77,20 @@ deferred, or dropped after discussion.
 ---
 
 ## Done
+
+### v1.3.0 (2026-09-27)
+
+- Public peek API: `numb.peek()` returns a handle with `update()`, `accept()`,
+  `cancel()` and `is_active()`, so pickers and other plugins get the same
+  preview as the command line. `User NumbPeek` and `User NumbUnpeek` fire for
+  every peek.
+- Float peek: `peek_style = "float"` or `"auto"` previews far jumps in a float
+  while the window stays in place, with `float = { height, position,
+  win_config }` and `'winborder'` support.
+- The in-place peek moved behind a strategy interface, so a new way of drawing
+  a peek does not reshape the handle.
+- `:2b` and similar buffer commands no longer land on the typed number in the
+  buffer switched to.
 
 See [CHANGELOG.md](CHANGELOG.md) for shipped features.
 

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-27
+
 ### Added
 - Public peek API for other plugins. `require('numb').peek(winnr, line, opts?)`
   previews a line in any window, exactly as the command line does, and returns
@@ -240,7 +242,8 @@ years of iterative improvements.
 - Replaced the previous `load()`-based arithmetic evaluator with a manual
   parser to eliminate code-execution risk from malformed input.
 
-[Unreleased]: https://github.com/nacro90/numb.nvim/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/nacro90/numb.nvim/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/nacro90/numb.nvim/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/nacro90/numb.nvim/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/nacro90/numb.nvim/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/nacro90/numb.nvim/compare/v1.0.0...v1.1.0
