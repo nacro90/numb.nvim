@@ -31,6 +31,13 @@ cursor position, the window options and the vertical scroll position it had.
 - **Preview destructive ranges.** `:50,80d` highlights lines 50 to 80 before you
   commit. Neovim previews `:substitute` through `inccommand` and nothing else, so
   `:d`, `:y`, `:m`, `:t` and `:g` had no preview at all.
+- **Preview far jumps without losing your place.** With `peek_style = "float"`
+  (or `"auto"`, which only floats when the target is off screen) the target is
+  shown in a strip over the window while the window itself does not move;
+  confirming still lands on the target.
+- **An API for other plugins.** `require('numb').peek()` gives pickers and
+  symbol lists the same preview, with `User NumbPeek` / `User NumbUnpeek`
+  events to follow any peek.
 - **Faithful to Ex semantics.** Both separators are honored (`,` counts from the
   cursor, `;` from the previous address), and when more than two addresses are
   given the last two win, so `:5,10,15d` highlights the 10 to 15 that Ex will
